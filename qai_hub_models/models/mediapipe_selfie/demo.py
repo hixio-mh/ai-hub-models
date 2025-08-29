@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from PIL.Image import fromarray
@@ -48,12 +49,13 @@ def main(
     model = demo_model_from_cli_args(SelfieSegmentation, MODEL_ID, args)
 
     # Run app
-    app = SelfieSegmentationApp(model)
+    # OnDeviceModel is underspecified to meet the Callable type requirements of the following
+    app = SelfieSegmentationApp(model)  # type: ignore[reportArgumentType]
     (_, _, height, width) = SelfieSegmentation.get_input_spec()["image"][0]
 
     image, scale, padding = pil_resize_pad(orig_image, (height, width))
-    mask = app.predict(image) * 255.0
-    mask = fromarray(mask).convert("L")
+    mask_arr = app.predict(image) * 255.0
+    mask = fromarray(mask_arr).convert("L")
     if not is_test:
         # Make sure the input image and mask are resized so the demo can visually
         # show the images in the same resolution.

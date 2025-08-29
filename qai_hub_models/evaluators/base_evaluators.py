@@ -1,12 +1,13 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Collection
-from typing import Union
+from typing import NamedTuple, Union
 
 import torch
 from torch.utils.data.dataloader import DataLoader
@@ -18,6 +19,12 @@ _ModelIO: TypeAlias = Union[Collection[torch.Tensor], torch.Tensor]
 _DataLoader: TypeAlias = Union[
     DataLoader, Collection[Union[_ModelIO, tuple[_ModelIO, _ModelIO]]]
 ]
+
+
+class MetricMetadata(NamedTuple):
+    name: str
+    unit: str
+    description: str
 
 
 class BaseEvaluator(ABC):
@@ -63,6 +70,10 @@ class BaseEvaluator(ABC):
     def formatted_accuracy(self) -> str:
         """Formatted string containing the accuracy and any relevant units."""
         pass
+
+    def get_metric_metadata(self) -> MetricMetadata:
+        """Metadata about the metric corresponding to get_accuracy_score."""
+        raise NotImplementedError()
 
     def add_from_dataset(
         self,
@@ -162,14 +173,20 @@ def _for_each_batch(
                     inputs = inputs.to(torch_device)
                     outputs = model(inputs)
                 else:
-                    inputs = [input.to(torch_device) for input in inputs]
+                    inputs = [
+                        input.to(  # pyright: ignore[reportAttributeAccessIssue]
+                            torch_device
+                        )
+                        for input in inputs
+                    ]
                     outputs = model(*inputs)
 
                 if data_has_gt:
                     if isinstance(ground_truth, torch.Tensor):
                         ground_truth = ground_truth.to("cpu")
                     else:
-                        ground_truth = [gt.to("cpu") for gt in ground_truth]  # type: ignore
+                        assert ground_truth is not None
+                        ground_truth = [gt.to("cpu") for gt in ground_truth]
 
                 if callback:
                     if data_has_gt:

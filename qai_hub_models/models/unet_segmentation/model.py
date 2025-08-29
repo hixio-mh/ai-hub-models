@@ -1,13 +1,16 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from typing import Optional
 
 import torch
 
+from qai_hub_models.evaluators.base_evaluators import BaseEvaluator
+from qai_hub_models.evaluators.segmentation_evaluator import SegmentationOutputEvaluator
 from qai_hub_models.models.common import SampleInputsType
 from qai_hub_models.utils.asset_loaders import (
     CachedWebModelAsset,
@@ -84,6 +87,10 @@ class UNet(BaseModel):
     def get_channel_last_inputs() -> list[str]:
         return ["image"]
 
+    @staticmethod
+    def get_channel_last_outputs() -> list[str]:
+        return ["mask"]
+
     def _sample_inputs_impl(
         self, input_spec: InputSpec | None = None
     ) -> SampleInputsType:
@@ -92,3 +99,14 @@ class UNet(BaseModel):
             h, w = input_spec["image"][0][2:]
             image = image.resize((w, h))
         return {"image": [app_to_net_image_inputs(image)[1].numpy()]}
+
+    def get_evaluator(self) -> BaseEvaluator:
+        return SegmentationOutputEvaluator(num_classes=2, resize_to_gt=True)
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["carvana"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "carvana"

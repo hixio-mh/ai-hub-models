@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -10,6 +11,10 @@ from pathlib import Path
 import torch.nn as nn
 import torch.nn.functional as F
 
+from qai_hub_models.evaluators.base_evaluators import BaseEvaluator
+from qai_hub_models.evaluators.posenet_mobilenet_evaluator import (
+    PosenetMobilenetEvaluator,
+)
 from qai_hub_models.models.common import SampleInputsType
 from qai_hub_models.utils.asset_loaders import (
     CachedWebModelAsset,
@@ -62,6 +67,9 @@ class PosenetMobilenet(BaseModel):
 
             return cls(model)
 
+    # Caution: adding typehints to this method's parameter or return will trigger a
+    # bug in torch that leads to the following exception:
+    # AttributeError: 'str' object has no attribute '__name__'. Did you mean: '__ne__'?
     def forward(self, image):
         """
         Image inputs are expected to be in RGB format in the range [0, 1].
@@ -96,3 +104,15 @@ class PosenetMobilenet(BaseModel):
     @staticmethod
     def get_channel_last_inputs() -> list[str]:
         return ["image"]
+
+    def get_evaluator(self) -> BaseEvaluator:
+        h, w = self.get_input_spec()["image"][0][2:]
+        return PosenetMobilenetEvaluator(h, w)
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["cocobody"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "cocobody"

@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -52,7 +53,7 @@ class YoloObjectDetectionApp:
                 Yolo object detection model.
 
                 Inputs:
-                    Tensor of shape (N H W C x float32) with range [0, 1] and BGR channel layout.
+                    Tensor of shape (N H W C x float32) with range [0, 1] and RGB channel layout.
 
                 Outputs:
                     boxes: Tensor of shape [batch, num preds, 4] where 4 == (x1, y1, x2, y2).
@@ -89,14 +90,14 @@ class YoloObjectDetectionApp:
 
     def predict_boxes_from_image(
         self,
-        pixel_values_or_image: torch.Tensor
-        | np.ndarray
-        | Image.Image
-        | list[Image.Image],
+        pixel_values_or_image: (
+            torch.Tensor | np.ndarray | Image.Image | list[Image.Image]
+        ),
         raw_output: bool = False,
-    ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]] | list[
-        np.ndarray
-    ]:
+    ) -> (
+        tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]
+        | list[np.ndarray]
+    ):
         """
         From the provided image or tensor, predict the bounding boxes & classes of objects detected within.
 
@@ -104,9 +105,9 @@ class YoloObjectDetectionApp:
             pixel_values_or_image: torch.Tensor
                 PIL image
                 or
-                numpy array (N H W C x uint8) or (H W C x uint8) -- both BGR channel layout
+                numpy array (N H W C x uint8) or (H W C x uint8) -- both RGB channel layout
                 or
-                pyTorch tensor (N C H W x fp32, value range is [0, 1]), BGR channel layout
+                pyTorch tensor (N C H W x fp32, value range is [0, 1]), RGB channel layout
 
             raw_output: bool
                 See "returns" doc section for details.
@@ -114,7 +115,7 @@ class YoloObjectDetectionApp:
         Returns:
             If raw_output is false or pixel_values_or_image is not a PIL image, returns:
                 images: list[np.ndarray]
-                    A list of predicted BGR, [H, W, C] images (one list element per batch). Each image will have bounding boxes drawn.
+                    A list of predicted RGB, [H, W, C] images (one list element per batch). Each image will have bounding boxes drawn.
 
             Otherwise, returns:
                 boxes: list[torch.Tensor]
@@ -234,7 +235,7 @@ class YoloSegmentationApp:
                 Yolo Segmentation model
 
                 Inputs:
-                    Tensor of shape (N H W C x float32) with range [0, 1] and BGR channel layout.
+                    Tensor of shape (N H W C x float32) with range [0, 1] and RGB channel layout.
 
                 Outputs:
                     boxes: torch.Tensor
@@ -277,14 +278,19 @@ class YoloSegmentationApp:
 
     def predict_segmentation_from_image(
         self,
-        pixel_values_or_image: torch.Tensor
-        | np.ndarray
-        | Image.Image
-        | list[Image.Image],
+        pixel_values_or_image: (
+            torch.Tensor | np.ndarray | Image.Image | list[Image.Image]
+        ),
         raw_output: bool = False,
-    ) -> tuple[
-        list[torch.Tensor], list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]
-    ] | list[Image.Image]:
+    ) -> (
+        tuple[
+            list[torch.Tensor],
+            list[torch.Tensor],
+            list[torch.Tensor],
+            list[torch.Tensor],
+        ]
+        | list[Image.Image]
+    ):
         """
         From the provided image or tensor, predict the bounding boxes & classes of objects detected within.
 
@@ -292,9 +298,9 @@ class YoloSegmentationApp:
             pixel_values_or_image: torch.Tensor
                 PIL image
                 or
-                numpy array (N H W C x uint8) or (H W C x uint8) -- both BGR channel layout
+                numpy array (N H W C x uint8) or (H W C x uint8) -- both RGB channel layout
                 or
-                pyTorch tensor (N C H W x fp32, value range is [0, 1]), BGR channel layout
+                pyTorch tensor (N C H W x fp32, value range is [0, 1]), RGB channel layout
 
             raw_output: bool
                 See "returns" doc section for details.

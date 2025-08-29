@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -33,19 +34,28 @@ class SegmentationApp:
         * Overlay the segmentation mask onto the image and return it
     """
 
-    def __init__(self, model: Callable[[torch.Tensor], torch.Tensor]):
+    def __init__(
+        self,
+        model: Callable[[torch.Tensor], torch.Tensor],
+        normalize_input: bool = True,
+    ):
         self.model = model
+        self.normalize_transform = (
+            normalize_image_transform() if normalize_input else lambda x: x
+        )
 
     def predict(self, *args, **kwargs):
         # See segment_image.
         return self.segment_image(*args, **kwargs)
 
+    def normalize_input(self, image: torch.Tensor) -> torch.Tensor:
+        return self.normalize_transform(image)
+
     def segment_image(
         self,
-        pixel_values_or_image: torch.Tensor
-        | np.ndarray
-        | Image.Image
-        | list[Image.Image],
+        pixel_values_or_image: (
+            torch.Tensor | np.ndarray | Image.Image | list[Image.Image]
+        ),
         raw_output: bool = False,
     ) -> list[Image.Image] | np.ndarray:
         """
@@ -74,8 +84,8 @@ class SegmentationApp:
         NHWC_int_numpy_frames, NCHW_fp32_torch_frames = app_to_net_image_inputs(
             pixel_values_or_image
         )
-        input_transform = normalize_image_transform()
-        NCHW_fp32_torch_frames = input_transform(NCHW_fp32_torch_frames)
+
+        NCHW_fp32_torch_frames = self.normalize_input(NCHW_fp32_torch_frames)
 
         # pred_mask is downsampled
         pred_masks = self.model(NCHW_fp32_torch_frames)

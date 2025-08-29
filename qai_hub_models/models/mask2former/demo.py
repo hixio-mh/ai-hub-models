@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 
 from qai_hub_models.models.mask2former.app import Mask2FormerApp
 from qai_hub_models.models.mask2former.model import (
@@ -20,10 +21,10 @@ from qai_hub_models.utils.base_model import BaseModel
 from qai_hub_models.utils.display import display_or_save_image
 
 INPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
-    MODEL_ID, MODEL_ASSET_VERSION, "test_images/image_640.jpg"
+    MODEL_ID, MODEL_ASSET_VERSION, "test_images/input_image.jpg"
 )
 OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
-    MODEL_ID, MODEL_ASSET_VERSION, "test_images/image_with_mask.png"
+    MODEL_ID, MODEL_ASSET_VERSION, "test_images/output_image.png"
 )
 
 

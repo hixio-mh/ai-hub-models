@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [VIT: Imagenet classifier and general purpose backbone](https://aihub.qualcomm.com/models/vit)
 
 VIT is a machine learning model that can classify images from the Imagenet dataset. It can also be used as a backbone in building more complex models for specific use cases.
@@ -16,11 +13,16 @@ accross various devices, can be found [here](https://aihub.qualcomm.com/models/v
 
 ## Example & Usage
 
+Install the package via pip:
+```bash
+pip install qai-hub-models
+```
+
 
 Once installed, run the following simple CLI demo:
 
 ```bash
-python -m qai_hub_models.models.vit.demo
+python -m qai_hub_models.models.vit.demo { --quantize w8a16, w8a8 }
 ```
 More details on the CLI tool can be found with the `--help` option. See
 [demo.py](demo.py) for sample usage of the model including pre/post processing
@@ -33,10 +35,9 @@ This repository contains export scripts that produce a model optimized for
 on-device deployment. This can be run as follows:
 
 ```bash
-python -m qai_hub_models.models.vit.export
+python -m qai_hub_models.models.vit.export { --quantize w8a16, w8a8 }
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -54,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

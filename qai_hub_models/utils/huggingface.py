@@ -1,41 +1,92 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
 
-from huggingface_hub import HfApi, HfFileSystem, hf_hub_download
+from huggingface_hub import HfApi, HfFileSystem, hf_hub_download, hf_hub_url
 from huggingface_hub.utils import GatedRepoError
 from packaging import version
 
+from qai_hub_models._version import __version__
 from qai_hub_models.utils.asset_loaders import ASSET_CONFIG, ModelZooAssetConfig
-from qai_hub_models.utils.base_model import TargetRuntime
+from qai_hub_models.utils.base_model import Precision, TargetRuntime
+
+
+def get_huggingface_model_filename(
+    model_name: str,
+    component: str | None,
+    precision: Precision,
+    chipset: str | None = None,
+    precompiled: bool = False,
+):
+    """
+    Get the model file name (without the extension) that we upload to Hugging Face for the given parameters.
+
+    Parameters:
+    model_name:
+        The NAME of the model (NOT THE MODEL ID)
+        Typically this is QAIHMModelInfo.from_model(model_id).name
+
+    component:
+        Model component name.
+        If this is None or the same string as parameter 'model_name',
+        this function assumes the model has only 1 component.
+
+    precision:
+        Model precision.
+
+    chipset:
+        Chipset this model is optimized for, or None if not applicable.
+
+    precompiled:
+        Whether or not this chipset is pre-compiled for a specific chipset.
+        If set, chipset must also be provided.
+    """
+    precision_ext = f"_{precision}" if precision != Precision.float else ""
+    component_ext = (
+        f"_{component}" if component != model_name and component is not None else ""
+    )
+
+    if precompiled:
+        assert (
+            chipset is not None
+        ), "You must specify a chipset to get the file name of pre-compiled model."
+
+    precompiled_folder_prefix = "precompiled/" if precompiled else ""
+    chipset_folder_prefix = f"{chipset}/" if chipset is not None else ""
+    return f"{precompiled_folder_prefix}{chipset_folder_prefix}{model_name}{component_ext}{precision_ext}"
 
 
 def fetch_huggingface_target_model(
     model_name: str,
+    model_components: list[str] | None,
+    precision: Precision,
+    chipset: str | None,
     dst_folder: str | Path,
     runtime_path: TargetRuntime = TargetRuntime.TFLITE,
     config: ModelZooAssetConfig = ASSET_CONFIG,
-) -> list[str]:
+    qaihm_version_tag: str | None = f"v{__version__}",
+    download: bool = True,
+) -> tuple[list[str], list[str]]:
     fs = HfFileSystem()
     hf_path = config.get_huggingface_path(model_name)
-
-    if runtime_path == TargetRuntime.TFLITE:
-        file_types = ["tflite"]
-    elif runtime_path == TargetRuntime.QNN:
-        file_types = ["so", "bin"]
-    elif runtime_path == TargetRuntime.ONNX:
-        file_types = ["onnx"]
-    else:
-        raise NotImplementedError()
+    file_types = [runtime_path.file_extension]
 
     files = []
-    for file_type in file_types:
-        files += fs.glob(os.path.join(hf_path, f"*.{file_type}"))
+    for component_name in model_components or [None]:  # type: ignore[list-item]
+        for file_type in file_types:
+            files += fs.glob(
+                os.path.join(
+                    hf_path,
+                    f"{get_huggingface_model_filename(model_name, component_name, precision, chipset if runtime_path.is_aot_compiled else None, runtime_path.is_aot_compiled)}.{file_type}",
+                )
+            )
+
     if not files:
         raise FileNotFoundError(
             f"No compiled assets are available on Huggingface for {model_name} with runtime {runtime_path.name}."
@@ -43,11 +94,25 @@ def fetch_huggingface_target_model(
 
     os.makedirs(dst_folder, exist_ok=True)
     paths = []
+    urls = []
     for file in files:
-        path = hf_hub_download(hf_path, file[len(hf_path) + 1 :], local_dir=dst_folder)
-        paths.append(path)
+        if download:
+            path = hf_hub_download(
+                hf_path,
+                file[len(hf_path) + 1 :],
+                local_dir=dst_folder,
+                revision=qaihm_version_tag,
+            )
+            paths.append(path)
 
-    return paths
+        url = hf_hub_url(
+            hf_path,
+            file[len(hf_path) + 1 :],
+            revision=qaihm_version_tag,
+        )
+        urls.append(url)
+
+    return paths, urls
 
 
 def has_model_access(repo_name: str, repo_url: str | None = None):

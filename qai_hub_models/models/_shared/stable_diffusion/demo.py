@@ -1,181 +1,149 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
-from __future__ import annotations
 
-import argparse
-from typing import Any
+from typing import Union
 
-import diffusers
-import numpy as np
-import qai_hub as hub
-from diffusers import DPMSolverMultistepScheduler
 from PIL import Image
-from transformers import CLIPTokenizer
 
-from qai_hub_models.models._shared.stable_diffusion.app import StableDiffusionApp
-from qai_hub_models.utils.args import add_output_dir_arg
-from qai_hub_models.utils.base_model import BasePrecompiledModel
-from qai_hub_models.utils.display import display_or_save_image
-from qai_hub_models.utils.inference import OnDeviceModel, get_uploaded_precompiled_model
-from qai_hub_models.utils.qai_hub_helpers import can_access_qualcomm_ai_hub
+from qai_hub_models.models._shared.stable_diffusion.app import (
+    OUT_H,
+    OUT_W,
+    StableDiffusionApp,
+)
+from qai_hub_models.models._shared.stable_diffusion.model import StableDiffusionBase
+from qai_hub_models.models._shared.stable_diffusion.utils import make_canny
+from qai_hub_models.models.common import Precision
+from qai_hub_models.utils.args import (
+    demo_model_components_from_cli_args,
+    get_model_cli_parser,
+    get_model_kwargs,
+    get_on_device_demo_parser,
+    validate_on_device_demo_args,
+)
+from qai_hub_models.utils.base_model import TargetRuntime
+from qai_hub_models.utils.display import display_or_save_image, to_uint8
+from qai_hub_models.utils.evaluate import EvalMode
 
-DEFAULT_DEMO_PROMPT = "spectacular view of northern lights from Alaska"
-DEFAULT_DEVICE_NAME = "Samsung Galaxy S23 Ultra"
-
-
-def _get_on_device_model(
-    model_id: str,
-    model_asset_version: str,
-    input_model: BasePrecompiledModel,
-    model_name: str,
-    ignore_cached_model: bool = False,
-    device_name=DEFAULT_DEVICE_NAME,
-) -> OnDeviceModel:
-    if not can_access_qualcomm_ai_hub():
-        raise RuntimeError(
-            "Stable-diffusion on-device demo requires access to QAI-Hub.\n"
-            "Please visit https://aihub.qualcomm.com/ and sign-up."
-        )
-    # Upload model
-    uploaded_model = get_uploaded_precompiled_model(
-        input_model.get_target_model_path(),
-        model_id,
-        model_asset_version,
-        model_name,
-        ignore_cached_model=ignore_cached_model,
-    )
-    inputs = list(input_model.get_input_spec().keys())
-    return OnDeviceModel(uploaded_model, inputs, hub.Device(name=device_name))
+DEFAULT_PROMPT = "Painting - She Danced By The Light Of The Moon by Steve Henderson"
 
 
 # Run Stable Diffuison end-to-end on a given prompt. The demo will output an
 # AI-generated image based on the description in the prompt.
 def stable_diffusion_demo(
     model_id: str,
-    model_asset_version: str,
-    text_encoder: BasePrecompiledModel,
-    unet: BasePrecompiledModel,
-    vae_decoder: BasePrecompiledModel,
-    tokenizer: CLIPTokenizer | Any,
-    scheduler: DPMSolverMultistepScheduler,
-    time_embedding: diffusers.embeddings.TimeEmbedding,
-    channel_last_latent: bool = True,
+    model_cls: type[StableDiffusionBase],
     is_test: bool = False,
+    default_guidance_scale: float = 7.5,
+    default_num_steps: int = 5,
+    use_controlnet: bool = False,
+    default_prompt: str = DEFAULT_PROMPT,
+    default_image: Union[str, None] = None,
 ):
     """
-    Generate an image by running text_encoder, unet, vae_decoder via AI Hub
-    inference job on target physical device, and tokenizer, scheduler, and
-    time embedding in torch locally.
-
-    See parser arguments for parameters.
+    Args:
+        default_image is only used if use_controlnet is True
     """
-    parser = argparse.ArgumentParser()
+    parser = get_model_cli_parser(model_cls)
+    parser = get_on_device_demo_parser(
+        parser=parser,
+        supported_eval_modes=[EvalMode.QUANTSIM, EvalMode.FP, EvalMode.ON_DEVICE],
+        supported_precisions={Precision.w8a16},
+        available_target_runtimes=[TargetRuntime.QNN_CONTEXT_BINARY],
+        default_device="Snapdragon X Elite CRD",
+        add_output_dir=True,
+    )
     parser.add_argument(
         "--prompt",
-        default=DEFAULT_DEMO_PROMPT,
-        help="Prompt to generate image from.",
+        type=str,
+        default=default_prompt,
+        help="Prompt for stable diffusion",
     )
+    if use_controlnet:
+        # TODO: provide default for this
+        parser.add_argument(
+            "--image",
+            type=str,
+            default=default_image,
+            help="Use canny image generated from this image as conditional image.",
+        )
     parser.add_argument(
         "--num-steps",
-        default=5,
         type=int,
-        help="The number of diffusion steps (higher means better quality).",
+        default=default_num_steps,
+        help="Number of diffusion steps",
     )
-    parser.add_argument(
-        "--seed",
-        default=0,
-        type=int,
-        help="Random seed.",
-    )
-    add_output_dir_arg(parser)
     parser.add_argument(
         "--guidance-scale",
         type=float,
-        default=7.5,
-        help="Strength of guidance (higher means more influence from prompt).",
-    )
-    parser.add_argument(
-        "--ignore-cached-model",
-        action="store_true",
-        help="Uploads model ignoring previously uploaded and cached model.",
-    )
-    parser.add_argument(
-        "--device-name",
-        type=str,
-        default=DEFAULT_DEVICE_NAME,
-        help="Device to run stable-diffusion demo on.",
+        default=default_guidance_scale,
+        help="Guidance scale",
     )
     args = parser.parse_args([] if is_test else None)
 
-    if not is_test:
-        print(f"\n{'-' * 100}")
-        print(
-            f"** Performing image generation on-device({args.device_name}) with Stable Diffusion **"
-        )
-        print()
-        print("Prompt:", args.prompt)
-        print("Number of steps:", args.num_steps)
-        print("Guidance scale:", args.guidance_scale)
-        print("Seed:", args.seed)
-        print()
-        print(
-            "Note: This reference demo uses significant amounts of memory and may take 4-5 minutes to run ** per step **."
-        )
-        print(f"{'-' * 100}\n")
+    validate_on_device_demo_args(args, model_id)
 
-    print(f"Downloading model assets\n{'-' * 35}")
-    # Load target models
+    canny_image = None
+    if use_controlnet:
+        # TODO: load this into torch.Tensor
+        canny_image = Image.open(args.image)
+        canny_image = make_canny(canny_image, OUT_H, OUT_W)
 
-    # Create three OnDeviceModel instances to prepare for on-device inference.
-    # This is similar to initializing PyTorch model to call forward method later.
-    # Instead of forward, we later submit inference_jobs on QAI-Hub for
-    # on-device evaluation.
-    print(f"Uploading model assets on QAI-Hub\n{'-' * 35}")
-    hub_text_encoder = _get_on_device_model(
-        model_id,
-        model_asset_version,
-        text_encoder,
-        "text_encoder",
-        args.ignore_cached_model,
-        args.device_name,
-    )
-    hub_unet = _get_on_device_model(
-        model_id,
-        model_asset_version,
-        unet,
-        "unet",
-        args.ignore_cached_model,
-        args.device_name,
-    )
-    hub_vae_decoder = _get_on_device_model(
-        model_id,
-        model_asset_version,
-        vae_decoder,
-        "vae_decoder",
-        args.ignore_cached_model,
-        args.device_name,
-    )
+    controlnet = None
+    if args.eval_mode == EvalMode.FP:
+        model_kwargs = get_model_kwargs(model_cls, vars(args))
+        # model = model_cls.from_pretrained(**kwargs)
+
+        text_encoder_cls = model_cls.component_classes[0]
+        text_encoder = text_encoder_cls.torch_from_pretrained(**model_kwargs)
+
+        unet_cls = model_cls.component_classes[1]
+        unet = unet_cls.torch_from_pretrained(**model_kwargs)
+
+        vae_cls = model_cls.component_classes[2]
+        vae_decoder = vae_cls.torch_from_pretrained(**model_kwargs)
+
+        if use_controlnet:
+            controlnet_cls = model_cls.component_classes[3]
+            controlnet = controlnet_cls.torch_from_pretrained(**model_kwargs)
+    else:
+        models = demo_model_components_from_cli_args(model_cls, model_id, args)
+        if use_controlnet:
+            text_encoder, unet, vae_decoder, controlnet = models
+        else:
+            text_encoder, unet, vae_decoder = models
+
+    assert issubclass(model_cls, StableDiffusionBase)
+    tokenizer = model_cls.make_tokenizer()
+    scheduler = model_cls.make_scheduler(args.checkpoint)
 
     app = StableDiffusionApp(
-        text_encoder=hub_text_encoder,
-        vae_decoder=hub_vae_decoder,
-        unet=hub_unet,
+        text_encoder=text_encoder,
+        vae_decoder=vae_decoder,
+        unet=unet,
         tokenizer=tokenizer,
         scheduler=scheduler,
-        time_embedding=time_embedding,
-        channel_last_latent=channel_last_latent,
+        # OnDeviceModel account for channel_last already
+        channel_last_latent=False,
+        controlnet=controlnet,
     )
 
     image = app.generate_image(
         args.prompt,
         num_steps=args.num_steps,
-        seed=args.seed,
         guidance_scale=args.guidance_scale,
+        cond_image=canny_image,
     )
 
-    pil_img = Image.fromarray(np.round(image.numpy() * 255).astype(np.uint8)[0])
+    pil_img = Image.fromarray(to_uint8(image.detach().cpu().numpy())[0])
 
+    if args.eval_mode == EvalMode.FP:
+        default_output_dir = "export/torch_fp32"
+    elif args.eval_mode == EvalMode.ON_DEVICE:
+        default_output_dir = "export/on_device_e2e"
+    else:  # quantsim
+        default_output_dir = "export/quantsim"
+    output_dir = args.output_dir or default_output_dir
     if not is_test:
-        display_or_save_image(pil_img, args.output_dir)
+        display_or_save_image(pil_img, output_dir)

@@ -1,14 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Callable
 
 import numpy as np
-import PIL
+import PIL.Image
 import torch
 from PIL.Image import Image
 from torchvision import transforms
@@ -29,7 +29,7 @@ def preprocess_image(image: Image) -> torch.Tensor:
     Returns:
         torch tensor to be directly passed to the model.
     """
-    out_tensor: torch.Tensor = transforms.ToTensor()(image)  # type: ignore
+    out_tensor: torch.Tensor = transforms.ToTensor()(image)
     return out_tensor.unsqueeze(0)
 
 
@@ -44,7 +44,7 @@ class FCN_ResNet50App:
         * Convert the raw output into probabilities using softmax
     """
 
-    def __init__(self, model: Callable[[torch.Tensor], OrderedDict]):
+    def __init__(self, model: Callable[[torch.Tensor], torch.Tensor]):
         self.model = model
 
     def predict(self, image: Image, raw_output: bool = False) -> Image | np.ndarray:

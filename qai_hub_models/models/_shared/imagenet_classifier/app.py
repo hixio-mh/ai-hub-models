@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
@@ -27,7 +28,8 @@ def preprocess_image(image: Image, normalize: bool = False) -> torch.Tensor:
     Returns:
         torch tensor to be directly passed to the model.
     """
-    out_tensor: torch.Tensor = IMAGENET_TRANSFORM(image)  # type: ignore
+    out_tensor = IMAGENET_TRANSFORM(image)
+    assert isinstance(out_tensor, torch.Tensor)
     if normalize:
         out_tensor = normalize_image_transform()(out_tensor)
 

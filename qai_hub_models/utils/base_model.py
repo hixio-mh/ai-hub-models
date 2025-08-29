@@ -1,18 +1,22 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
+import inspect
 from contextlib import nullcontext
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 import torch
 from qai_hub.client import Device
 
 from qai_hub_models.models.common import (
+    Precision,
+    QAIRTVersion,
     SampleInputsType,
     SourceModelFormat,
     TargetRuntime,
@@ -24,6 +28,7 @@ from qai_hub_models.models.protocols import (
     HubModelProtocol,
     PretrainedHubModelProtocol,
 )
+from qai_hub_models.utils.checkpoint import CheckpointSpec
 from qai_hub_models.utils.input_spec import (
     InputSpec,
     broadcast_data_to_multi_batch,
@@ -35,12 +40,198 @@ from qai_hub_models.utils.transpose_channel import transpose_channel_first_to_la
 
 class CollectionModel:
     """
-    Model that glues together several BaseModels
+    Model that glues together several BaseModels or BasePrecompiledModel.
+
+    See test_base_model.py for usage examples.
     """
+
+    component_classes: list[type[BaseModel]] = []
+    component_class_names: list[str] = []
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        # Make copies of the list for each subclass so they don't share state
+        cls.component_classes = list(cls.component_classes)
+        cls.component_class_names = list(cls.component_class_names)
+
+    def __init__(self, *args):
+        component_names = type(self).component_class_names
+        components: dict[str, BaseModel | BasePrecompiledModel] = (
+            {}
+        )  # class name -> instantiated object
+
+        # Process positional arguments.
+        if len(args) != len(component_names):
+            raise ValueError(
+                f"CollectionModel has {len(component_names)} ordered arguments, "
+                "each of which should correspond with a single component."
+            )
+        for i, (name, arg) in enumerate(zip(component_names, args)):
+            expected_class = type(self).component_classes[i]
+            if not isinstance(arg, (expected_class, ExecutableModelProtocol)):
+                raise ValueError(
+                    f"Expected component '{name}' to be an instance "
+                    f"of {name} or ExecutableModelProtocol, got {type(arg).__name__}"
+                )
+            assert isinstance(arg, (BaseModel, BasePrecompiledModel))
+            components[name] = arg
+
+        # Check that all required components are provided.
+        missing = [name for name in component_names if name not in components]
+        if missing:
+            raise ValueError(f"Missing components for: {missing}")
+
+        self.components = components
+
+    @staticmethod
+    def add_component(
+        component_class: type,
+        component_name: str | None = None,
+        subfolder_hf: str | None = None,
+    ):
+        """
+        Decorator to add a component (a subclass of BaseModel or
+        BasePrecompiledModel) to a CollectionModel.  The component is
+        inserted at the beginning of the class-level dictionary `component_classes`,
+        so that the outer decorator appears first.
+
+        See test_base_model.py for usage examples.
+
+        Args:
+
+        - component_name: Name the component. By default uses
+        component_class.__name__
+
+        - subfolder_hf: By default the same as component_name. Specify this
+        only when Huggingface uses a different subfolder name than the desired
+        component_name.  (e.g., in ControlNet the ControlNet model is not in
+        any subfolder on HF, so subfolder_hf = "" even though we want
+        to name our component "controlnet")
+
+        """
+
+        def decorator(subclass):
+            name = component_name or component_class.__name__
+            if name in subclass.component_class_names:
+                raise ValueError(f"Component with name {name} already registered")
+            # prepend list
+            subclass.component_classes.insert(0, component_class)
+            subclass.component_class_names.insert(0, name)
+
+            # Component class from_pretrained would look for default_subfolder
+            # under checkpoint dir if checkpoint is local, or
+            # default_subfolder_hf if checkpoint is on HF. Typically
+            # default_subfolder == default_subfolder_hf
+            # Allow @add_component(Klass, "") to enforce having no subfolder.
+            # This is needed for controlnet where the controlnet is from a
+            # different repo without subfolders
+            subfolder = subfolder_hf if subfolder_hf is not None else name
+            setattr(component_class, "default_subfolder", component_name)
+            setattr(component_class, "default_subfolder_hf", subfolder)
+            return subclass
+
+        return decorator
+
+    @staticmethod
+    def reset_components():
+        """
+        Decorator to erase all components set on a CollectionModel.
+        Useful when subclassing a CollectionModel and overriding component classes.
+
+        See test_base_model.py for usage examples.
+        """
+
+        def decorator(subclass):
+            subclass.component_classes = []
+            subclass.component_class_names = []
+            return subclass
+
+        return decorator
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        """
+        Returns list of strings with names of all datasets on which
+        this model can be evaluated.
+
+        All names must be registered in qai_hub_models/datasets/__init__.py
+        """
+        return []
 
 
 class PretrainedCollectionModel(CollectionModel, FromPretrainedProtocol):
-    pass
+    @classmethod
+    def from_pretrained(
+        cls,
+        checkpoint: CheckpointSpec = "DEFAULT",
+        host_device: Union[torch.device, str] = torch.device("cpu"),
+        **kwargs,  # any extra you might want to forward
+    ) -> PretrainedCollectionModel:
+        """
+        Instantiate the collection by delegating to each component_cls.from_pretrained,
+        but only passing it the arguments it actually declares.
+        """
+        # common kwargs we’d like to pass
+        base_kwargs = {
+            "checkpoint": checkpoint,
+            "host_device": host_device,
+            **kwargs,
+        }
+
+        # helper to call any fn with only the supported subset of base_kwargs
+        def _call_with_supported(fn, all_kwargs):
+            sig = inspect.signature(fn)
+            params = sig.parameters.values()
+
+            # If fn accepts **kwargs, just pass everything through
+            if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params):
+                return fn(**all_kwargs)
+
+            # Otherwise, filter to only the names fn explicitly declares
+            supported = {
+                name: value
+                for name, value in all_kwargs.items()
+                if name in sig.parameters
+            }
+            return fn(**supported)
+
+        components = []
+        for name, component_cls in zip(
+            cls.component_class_names, cls.component_classes
+        ):
+            # call component_cls.from_pretrained but only with the args it accepts
+            try:
+                comp = _call_with_supported(component_cls.from_pretrained, base_kwargs)
+            except Exception as e:
+                raise AttributeError(
+                    f"Component '{component_cls.__name__}' does not have "
+                    f"a callable from_pretrained method. {e}"
+                )
+            components.append(comp)
+
+        # now build and return your collection model however CollectionModel expects
+        return cls(*components)
+
+
+class PrecompiledCollectionModel(CollectionModel, FromPrecompiledProtocol):
+    @classmethod
+    def from_precompiled(cls):
+        """
+        Instantiate the CollectionModel by instantiating all registered components
+        using their own from_precompiled() methods.
+        """
+        components = []
+        for component_cls in cls.component_classes:
+            if not (
+                hasattr(component_cls, "from_precompiled")
+                and callable(component_cls.from_precompiled)
+            ):
+                raise AttributeError(
+                    f"Component '{component_cls.__name__}' does not have "
+                    "a callable from_precompiled method"
+                )
+            components.append(component_cls.from_precompiled())
+        return cls(*components)
 
 
 class HubModel(HubModelProtocol):
@@ -52,13 +243,13 @@ class HubModel(HubModelProtocol):
         # If a child class implements _get_input_spec_for_instance(),
         # then calling `get_input_spec` on the instance will redirect to it.
         if self._get_input_spec_for_instance.__module__ != __name__:
-            self.get_input_spec = self._get_input_spec_for_instance
+            self.get_input_spec = self._get_input_spec_for_instance  # type: ignore[method-assign]
         if self._get_output_names_for_instance.__module__ != __name__:
-            self.get_output_names = self._get_output_names_for_instance
+            self.get_output_names = self._get_output_names_for_instance  # type: ignore[method-assign]
         if self._get_channel_last_inputs_for_instance.__module__ != __name__:
-            self.get_channel_last_inputs = self._get_channel_last_inputs_for_instance
+            self.get_channel_last_inputs = self._get_channel_last_inputs_for_instance  # type: ignore[method-assign]
         if self._get_channel_last_outputs_for_instance.__module__ != __name__:
-            self.get_channel_last_outputs = self._get_channel_last_outputs_for_instance
+            self.get_channel_last_outputs = self._get_channel_last_outputs_for_instance  # type: ignore[method-assign]
 
     def _get_input_spec_for_instance(self, *args, **kwargs) -> InputSpec:
         """
@@ -123,7 +314,7 @@ class HubModel(HubModelProtocol):
         sample_inputs = self._sample_inputs_impl(input_spec, **kwargs)
         if input_spec is not None:
             batch_size = get_batch_size(input_spec)
-            if batch_size > 1:
+            if batch_size is not None and batch_size > 1:
                 sample_inputs = broadcast_data_to_multi_batch(input_spec, sample_inputs)
         if use_channel_last_format and self.get_channel_last_inputs():
             return transpose_channel_first_to_last(
@@ -159,7 +350,29 @@ class HubModel(HubModelProtocol):
         """
         AI Hub profile options recommended for the model.
         """
+        if QAIRTVersion.HUB_FLAG not in other_profile_options:
+            other_profile_options = (
+                other_profile_options
+                + f" {target_runtime.default_qairt_version.hub_option}"
+            )
+
         return other_profile_options
+
+    def get_hub_link_options(
+        self,
+        target_runtime: TargetRuntime,
+        other_link_options: str = "",
+    ) -> str:
+        """
+        AI Hub link options recommended for the model.
+        """
+        if QAIRTVersion.HUB_FLAG not in other_link_options:
+            other_link_options = (
+                other_link_options
+                + f" {target_runtime.default_qairt_version.hub_option}"
+            )
+
+        return other_link_options
 
     @staticmethod
     def get_channel_last_inputs() -> list[str]:
@@ -251,7 +464,7 @@ class BaseModel(
         # Local import to prevent circular dependency
         from qai_hub_models.utils.inference import prepare_compile_zoo_model_to_hub
 
-        source_model, _ = prepare_compile_zoo_model_to_hub(
+        source_model = prepare_compile_zoo_model_to_hub(
             self,
             source_model_format=self.preferred_hub_source_model_format(target_runtime),
             target_runtime=target_runtime,
@@ -266,6 +479,7 @@ class BaseModel(
     def get_hub_compile_options(
         self,
         target_runtime: TargetRuntime,
+        precision: Precision,
         other_compile_options: str = "",
         device: Optional[Device] = None,
     ) -> str:
@@ -274,7 +488,14 @@ class BaseModel(
         """
         compile_options = ""
         if "--target_runtime" not in other_compile_options:
-            compile_options = target_runtime.get_target_runtime_flag(device)
+            compile_options = target_runtime.aihub_target_runtime_flag
+        if (
+            QAIRTVersion.HUB_FLAG not in other_compile_options
+            and target_runtime.qairt_version_changes_compilation
+        ):
+            compile_options = (
+                compile_options + f" {target_runtime.default_qairt_version.hub_option}"
+            )
 
         compile_options += f" --output_names {','.join(self.get_output_names())}"
 
@@ -287,6 +508,17 @@ class BaseModel(
                 compile_options += (
                     f" --force_channel_last_output {channel_last_outputs}"
                 )
+
+        if precision.activations_type is not None:
+            compile_options += " --quantize_io"
+            if target_runtime == TargetRuntime.TFLITE:
+                # uint8 is the easiest I/O type for integration purposes,
+                # especially for image applications. Images are always
+                # uint8 RGB when coming from disk or a camera.
+                #
+                # Uint8 has not been thoroughly tested with other paths,
+                # so it is enabled only for TF Lite today.
+                compile_options += " --quantize_io_type uint8"
 
         if other_compile_options != "":
             return compile_options + " " + other_compile_options
@@ -301,6 +533,72 @@ class BaseModel(
         """
         return SourceModelFormat.TORCHSCRIPT
 
+    def get_unsupported_reason(
+        self, target_runtime: TargetRuntime, device: Device
+    ) -> None | str:
+        """
+        Report the reason if any combination of runtime and device isn't
+        supported.
+        """
+        return None
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        """
+        Returns list of strings with names of all datasets on which
+        this model can be evaluated.
+
+        All names must be registered in qai_hub_models/datasets/__init__.py
+        """
+        return []
+
+    @staticmethod
+    def calibration_dataset_name() -> str | None:
+        """
+        Name of the dataset to use for calibration when quantizing the model.
+
+        Must be registered in qai_hub_models/datasets/__init__.py
+        """
+        return None
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        """
+        Return the AI Hub quantize options for the given model precision.
+
+        Generates CLI flags used during AI Hub quantization.
+
+        - For `w8a8` precision, the default `range_scheme` is `mse_minimizer`.
+        - For `w8a16` and mixed-precision profiles, the `range_scheme` is set to `min_max`.
+        - For mixed-precision profiles, additional flags are included to specify the percentage and override quantization type (`int16` or `fp16`).
+        """
+        if precision == Precision.w8a16:
+            return "--range_scheme min_max"
+        elif (
+            precision == Precision.w8a8_mixed_int16
+            or precision == Precision.w8a16_mixed_int16
+        ):
+            return f"--range_scheme min_max --lite_mp percentage={self.get_hub_litemp_percentage(precision)};overide_qtype=int16"
+        elif (
+            precision == Precision.w8a8_mixed_fp16
+            or precision == Precision.w8a16_mixed_fp16
+        ):
+            return f"--range_scheme min_max --lite_mp percentage={self.get_hub_litemp_percentage(precision)};overide_qtype=fp16"
+        else:
+            return ""  # default to range_scheme mse_minimizer
+
+    @staticmethod
+    def get_hub_litemp_percentage(precision: Precision) -> float:
+        """
+        Returns the Lite-MP percentage value for the specified mixed precision quantization.
+
+        This method should be implemented for the models that support mixed precision quantization.
+
+        NOTE: precision parameter is only included in the method signature to maintain compatibility with the base class.
+        """
+        raise NotImplementedError(
+            f"Mixed precision {precision} is not supported for this model."
+        )
+
 
 class BasePrecompiledModel(HubModel, FromPrecompiledProtocol):
     """
@@ -314,3 +612,12 @@ class BasePrecompiledModel(HubModel, FromPrecompiledProtocol):
     def get_target_model_path(self) -> str:
         """Get the path to the compiled asset for this model on disk."""
         return self.target_model_path
+
+    def get_unsupported_reason(
+        self, target_runtime: TargetRuntime, device: Device
+    ) -> None | str:
+        """
+        Report the reason if any combination of runtime and device isn't
+        supported.
+        """
+        return None

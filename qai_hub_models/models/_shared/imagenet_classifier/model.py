@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from typing import Callable, Optional
@@ -124,6 +125,14 @@ class ImagenetClassifier(BaseModel):
     @staticmethod
     def get_channel_last_inputs() -> list[str]:
         return ["image_tensor"]
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["imagenet", "imagenette"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "imagenette"
 
 
 class ImagenetClassifierWithModelBuilder(ImagenetClassifier):

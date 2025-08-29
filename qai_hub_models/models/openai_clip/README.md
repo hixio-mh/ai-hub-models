@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [OpenAI-Clip: Multi-modal foundational model for vision and language tasks like image/text similarity and for zero-shot image classification](https://aihub.qualcomm.com/models/openai_clip)
 
 Contrastive Language-Image Pre-Training (CLIP) uses a ViT like transformer to get visual features and a causal language model to get the text features. Both the text and visual features can then be used for a variety of zero-shot learning tasks.
@@ -40,8 +37,7 @@ on-device deployment. This can be run as follows:
 ```bash
 python -m qai_hub_models.models.openai_clip.export
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -59,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

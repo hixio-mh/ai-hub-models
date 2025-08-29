@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import sys
@@ -9,6 +10,7 @@ import sys
 import torch
 
 from qai_hub_models.models._shared.depth_estimation.model import DepthEstimationModel
+from qai_hub_models.models.common import Precision
 from qai_hub_models.utils.asset_loaders import (
     CachedWebModelAsset,
     SourceAsRoot,
@@ -139,3 +141,14 @@ class Midas(DepthEstimationModel):
         if self.normalize_input:
             image = normalize_image_torchvision(image)
         return self.model(image)
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        return "--range_scheme min_max"
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["nyuv2"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "nyuv2"

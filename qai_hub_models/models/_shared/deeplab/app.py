@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -27,7 +28,7 @@ def preprocess_image(image: Image) -> torch.Tensor:
     Returns:
         torch tensor to be directly passed to the model.
     """
-    out_tensor: torch.Tensor = transforms.ToTensor()(image)  # type: ignore
+    out_tensor: torch.Tensor = transforms.ToTensor()(image)
     return out_tensor.unsqueeze(0)
 
 

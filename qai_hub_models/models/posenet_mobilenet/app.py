@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 
 from __future__ import annotations
 
@@ -13,7 +14,6 @@ import torch
 from PIL import Image
 from torchvision import transforms
 
-from qai_hub_models.models.posenet_mobilenet.model import OUTPUT_STRIDE
 from qai_hub_models.utils.draw import draw_points
 from qai_hub_models.utils.image_processing import pil_resize_pad, pil_undo_resize_pad
 
@@ -82,6 +82,7 @@ CONNECTED_PART_NAMES = [
 ]
 
 CONNECTED_PART_INDICES = [(PART_IDS[a], PART_IDS[b]) for a, b in CONNECTED_PART_NAMES]
+OUTPUT_STRIDE = 16
 
 
 def traverse_to_targ_keypoint(
@@ -226,7 +227,7 @@ def within_nms_radius_fast(
     """
     if not pose_coords.shape[0]:
         return False
-    return np.any(np.sum((pose_coords - point) ** 2, axis=1) <= nms_radius**2)
+    return bool(np.any(np.sum((pose_coords - point) ** 2, axis=1) <= nms_radius**2))
 
 
 def get_instance_score_fast(
@@ -491,7 +492,6 @@ def draw_skel_and_kp(
 
 
 class PosenetApp:
-    pass
     """
     This class consists of light-weight "app code" that is required to perform end to end inference with Posenet.
 
@@ -508,7 +508,8 @@ class PosenetApp:
     def __init__(
         self,
         model: Callable[
-            [torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]
+            [torch.Tensor],
+            tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
         ],
         input_height: int,
         input_width: int,
@@ -525,7 +526,7 @@ class PosenetApp:
         self,
         image: Image.Image,
         raw_output: bool = False,
-    ) -> np.ndarray | Image.Image:
+    ) -> Image.Image | tuple[np.ndarray, np.ndarray, np.ndarray]:
         """
         Predicts up to 17 pose keypoints for up to 10 people in the image.
 
@@ -555,7 +556,6 @@ class PosenetApp:
         tensor = transforms.ToTensor()(image)
         tensor = tensor.reshape(1, 3, self.input_height, self.input_width)
 
-        np.save("build/posenet_inputs", tensor.numpy())
         (
             heatmaps_result,
             offsets_result,

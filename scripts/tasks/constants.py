@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import os
 import subprocess
 
@@ -9,6 +10,8 @@ import subprocess
 def process_output(command):
     return command.stdout.decode("utf-8").strip()
 
+
+DEFAULT_PYTHON = "python3.10"
 
 BASH_EXECUTABLE = process_output(
     subprocess.run("which bash", stdout=subprocess.PIPE, shell=True, check=True)
@@ -52,6 +55,13 @@ PY_PACKAGE_LOCAL_CACHE = os.environ.get(
 )
 PY_PACKAGE_MODELS_ROOT = os.path.join(
     PY_PACKAGE_INSTALL_ROOT, PY_PACKAGE_RELATIVE_MODELS_ROOT
+)
+STATIC_MODELS_ROOT = os.path.join(
+    PY_PACKAGE_SRC_ROOT, "scorecard", "internal", "models"
+)
+
+PUBLIC_BENCH_MODELS = os.path.join(
+    PY_PACKAGE_SRC_ROOT, "scorecard", "internal", "pytorch_bench_models_float.txt"
 )
 
 # Requirements Path

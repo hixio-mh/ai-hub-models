@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import logging
@@ -103,8 +104,8 @@ def _load_lama_dilated_source_model_from_weights(weights_name: str) -> torch.nn.
         )
 
         # Pass config as needed to create the module for tracing.
-        config = load_json(config_url)
-        config = OmegaConf.create(config)
+        config_json = load_json(config_url)
+        config = OmegaConf.create(config_json)
         kwargs = dict(config.training_model)
         kwargs.pop("kind")
         kwargs["use_ddp"] = True

@@ -1,8 +1,10 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
 
+
+import sys
 from collections.abc import Callable
 
 import cv2
@@ -25,12 +27,17 @@ def capture_and_display_processed_frames(
     Inputs:
         frame_processor: Callable[[np.ndarray], np.ndarray]
             Processes frames.
-            Input and output are numpy arrays of shape (H W C) with BGR channel layout and dtype uint8 / byte.
+            Input and output are numpy arrays of shape (H W C) with RGB channel layout and dtype uint8 / byte.
         window_display_name: str
             Name of the window used to display frames.
         cap_device: int
             Identifier for the camera to use to capture frames.
     """
+    if sys.platform.startswith("win"):
+        print(
+            "WARNING: On windows, it make take up to a minute for camera capture to start and display on screen."
+        )
+
     cv2.namedWindow(window_display_name)
     capture = cv2.VideoCapture(cap_device)
     if not capture.isOpened():
@@ -50,8 +57,15 @@ def capture_and_display_processed_frames(
         cv2.imshow(window_display_name, processed_frame[:, :, ::-1])
 
         has_frame, frame = capture.read()
+
+        # detect if user closes GUI window (https://stackoverflow.com/a/45564409)
+        gui_close = cv2.getWindowProperty(window_display_name, cv2.WND_PROP_VISIBLE) < 1
+
+        # or hits escape key
         key = cv2.waitKey(1)
-        if key == ESCAPE_KEY_ID:
+        escape_close = key == ESCAPE_KEY_ID
+
+        if escape_close or gui_close:
             break
 
     capture.release()

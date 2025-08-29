@@ -1,54 +1,68 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import datetime
+import time
 from functools import cached_property
-from typing import Any, Generic, Optional, TypeVar, Union, cast
+from typing import Any, Generic, Optional, TypeVar, cast
 
 import qai_hub as hub
 from qai_hub.public_rest_api import DatasetEntries
 
+from qai_hub_models.configs.perf_yaml import QAIHMModelPerf, ToolVersions
+from qai_hub_models.models.common import Precision
 from qai_hub_models.scorecard import (
     ScorecardCompilePath,
     ScorecardDevice,
     ScorecardProfilePath,
 )
 
-JobTypeVar = TypeVar("JobTypeVar", hub.ProfileJob, hub.InferenceJob, hub.CompileJob)
+JobTypeVar = TypeVar(
+    "JobTypeVar", hub.ProfileJob, hub.InferenceJob, hub.CompileJob, hub.QuantizeJob
+)
 ScorecardPathTypeVar = TypeVar(
     "ScorecardPathTypeVar", ScorecardCompilePath, ScorecardProfilePath
 )
+ScorecardPathOrNoneTypeVar = TypeVar(
+    "ScorecardPathOrNoneTypeVar", ScorecardCompilePath, ScorecardProfilePath, None
+)
 
-# Specific typevar. Autofill has trouble resolving types for nested generics without specifically listing ineritors of the generic base.
+# Specific typevar. Autofill has trouble resolving types for nested generics without specifically listing inheritors of the generic base.
 ScorecardJobTypeVar = TypeVar(
     "ScorecardJobTypeVar",
+    "QuantizeScorecardJob",
     "CompileScorecardJob",
     "ProfileScorecardJob",
     "InferenceScorecardJob",
 )
 
 
-class ScorecardJob(Generic[JobTypeVar, ScorecardPathTypeVar]):
+class ScorecardJob(Generic[JobTypeVar, ScorecardPathOrNoneTypeVar]):
     job_type_class: type[JobTypeVar]
 
     def __init__(
         self,
         model_id: str,
+        precision: Precision,
         job_id: Optional[str],
         device: ScorecardDevice,
         wait_for_job: bool,  # If false, running jobs are treated like they were "skipped".
-        wait_job_secs: Optional[int],  # None == any number of seconds
-        path: ScorecardPathTypeVar,
+        wait_for_max_job_duration: Optional[
+            int
+        ],  # Allow the job this many seconds after creation to complete
+        path: ScorecardPathOrNoneTypeVar,
     ):
         self.model_id = model_id
+        self.precision = precision
         self.job_id = job_id
         self._device = device
         self.wait_for_job = wait_for_job
-        self.wait_job_secs = wait_job_secs
-        self.path: ScorecardPathTypeVar = path
+        self.wait_for_max_job_duration = wait_for_max_job_duration
+        self.path: ScorecardPathOrNoneTypeVar = path
         self.__post_init__()
 
     def __post_init__(self):
@@ -76,7 +90,15 @@ class ScorecardJob(Generic[JobTypeVar, ScorecardPathTypeVar]):
             if not self.wait_for_job:
                 return job
             else:
-                job.wait(self.wait_job_secs)
+                if self.wait_for_max_job_duration:
+                    time_left = int(
+                        job.date.timestamp()
+                        + self.wait_for_max_job_duration
+                        - time.time()
+                    )
+                    job.wait(time_left)
+                else:
+                    job.wait()
         return job
 
     @cached_property
@@ -120,7 +142,13 @@ class ScorecardJob(Generic[JobTypeVar, ScorecardPathTypeVar]):
 
     @cached_property
     def device(self) -> hub.Device:
-        return self.job.device if not self.skipped else self._device.reference_device
+        if not self.skipped and not isinstance(self.job, hub.QuantizeJob):
+            return self.job.device
+        return self._device.reference_device
+
+    @cached_property
+    def tool_versions(self) -> ToolVersions:
+        return ToolVersions.from_job(self.job, parse_version_tags=True)
 
     @cached_property
     def chipset(self) -> str:
@@ -135,20 +163,14 @@ class ScorecardJob(Generic[JobTypeVar, ScorecardPathTypeVar]):
         raise ValueError("No chipset found.")
 
     @cached_property
-    def quantized(self) -> str:
-        """Quantized models are marked so precision can be correctly recorded."""
-        return (
-            "Yes"
-            if self.model_id.endswith("quantized")
-            or self.model_id.endswith("quantizable")
-            else "No"
-        )
-
-    @cached_property
     def date(self) -> Optional[datetime.datetime]:
         if self.job is None:
             return None
         return self.job.date
+
+
+class QuantizeScorecardJob(ScorecardJob[hub.QuantizeJob, ScorecardCompilePath]):
+    job_type_class = hub.QuantizeJob
 
 
 class CompileScorecardJob(ScorecardJob[hub.CompileJob, ScorecardCompilePath]):
@@ -167,111 +189,73 @@ class ProfileScorecardJob(ScorecardJob[hub.ProfileJob, ScorecardProfilePath]):
     def profile_results(self) -> dict[str, Any]:
         """Profile results from profile job."""
         if self.success:
-            return self.job.download_profile()  # type: ignore
+            profile = self.job.download_profile()
+            assert isinstance(profile, dict)
+            return profile
         raise ValueError("Can't get profile results if job did not succeed.")
 
     @cached_property
-    def inference_time(self) -> Union[float, str]:
+    def inference_time_milliseconds(self) -> float:
         """Get the inference time from the profile job."""
-        if self.success:
-            return float(
-                self.profile_results["execution_summary"]["estimated_inference_time"]
-            )
-        return "null"
+        return float(
+            self.profile_results["execution_summary"]["estimated_inference_time"] / 1000
+        )
 
     @cached_property
-    def throughput(self) -> Union[float, str]:
-        """Get the throughput from the profile job."""
-        if not isinstance(self.inference_time, str):
-            return 1000000 / self.inference_time  # type: ignore
-        return "null"
+    def first_load_time_milliseconds(self) -> float:
+        """Get the first load time from the profile job."""
+        return float(
+            self.profile_results["execution_summary"]["first_load_time"] / 1000
+        )
 
-    def get_layer_info(self, unit: str) -> int:
+    @cached_property
+    def warm_load_time_milliseconds(self) -> float:
+        """Get the warm load time from the profile job."""
+        return float(self.profile_results["execution_summary"]["warm_load_time"] / 1000)
+
+    @cached_property
+    def layer_counts(self) -> QAIHMModelPerf.PerformanceDetails.LayerCounts:
         """Count layers per compute unit."""
-        if self.profile_results is not None:
-            count: int = 0
-            count = sum(
+
+        def _count_unit(unit: str) -> int:
+            return sum(
                 1
                 for detail in self.profile_results["execution_detail"]
                 if detail["compute_unit"] == unit
             )
-            return count
-        return 0
+
+        cpu = _count_unit("CPU")
+        gpu = _count_unit("GPU")
+        npu = _count_unit("NPU")
+
+        return QAIHMModelPerf.PerformanceDetails.LayerCounts.from_layers(npu, gpu, cpu)
 
     @cached_property
-    def npu(self) -> int:
-        """Get number of layers running on NPU."""
-        return self.get_layer_info("NPU") if self.success else 0
-
-    @cached_property
-    def gpu(self) -> int:
-        """Get number of layers running on GPU."""
-        return self.get_layer_info("GPU") if self.success else 0
-
-    @cached_property
-    def cpu(self) -> int:
-        """Get number of layers running on CPU."""
-        return self.get_layer_info("CPU") if self.success else 0
-
-    @cached_property
-    def total(self) -> int:
-        """Get the total number of layers."""
-        return self.npu + self.gpu + self.cpu
-
-    @cached_property
-    def primary_compute_unit(self) -> str:
-        """Get the primary compute unit."""
-        layers_npu = self.npu
-        layers_gpu = self.gpu
-        layers_cpu = self.cpu
-
-        if layers_npu == 0 and layers_gpu == 0 and layers_cpu == 0:
-            return "null"
-        compute_unit_for_most_layers = max(layers_cpu, layers_gpu, layers_npu)
-        if compute_unit_for_most_layers == layers_npu:
-            return "NPU"
-        elif compute_unit_for_most_layers == layers_gpu:
-            return "GPU"
-        return "CPU"
-
-    @cached_property
-    def peak_memory_range(self) -> dict[str, int]:
+    def estimated_peak_memory_range_mb(
+        self,
+    ) -> QAIHMModelPerf.PerformanceDetails.PeakMemoryRangeMB:
         """Get the estimated peak memory range."""
-        if self.success:
-            low, high = self.profile_results["execution_summary"][
-                "inference_memory_peak_range"
-            ]
-            return dict(min=low, max=high)
-        return dict(min=0, max=0)
+        low, high = self.profile_results["execution_summary"][
+            "inference_memory_peak_range"
+        ]
+        return QAIHMModelPerf.PerformanceDetails.PeakMemoryRangeMB.from_bytes(low, high)
 
     @cached_property
-    def precision(self) -> str:
-        """Get the precision of the model based on the run."""
-        if self.success:
-            compute_unit = self.primary_compute_unit
-            if compute_unit == "CPU":
-                return "fp32"
-            if self.quantized == "Yes":
-                return "int8"
-            return "fp16"
-        return "null"
-
-    @cached_property
-    def performance_metrics(self) -> dict[str, Any]:
-        metrics = dict(
-            inference_time=self.inference_time,
-            throughput=self.throughput,
-            estimated_peak_memory_range=self.peak_memory_range,
-            primary_compute_unit=self.primary_compute_unit,
-            precision=self.precision,
-            layer_info=dict(
-                layers_on_npu=self.npu,
-                layers_on_gpu=self.gpu,
-                layers_on_cpu=self.cpu,
-                total_layers=self.total,
-            ),
+    def performance_metrics(self) -> QAIHMModelPerf.PerformanceDetails:
+        metrics = QAIHMModelPerf.PerformanceDetails(
             job_id=self.job_id,
             job_status=self.job_status,
+            inference_time_milliseconds=(
+                self.inference_time_milliseconds if self.success else None
+            ),
+            estimated_peak_memory_range_mb=(
+                self.estimated_peak_memory_range_mb if self.success else None
+            ),
+            primary_compute_unit=(
+                self.layer_counts.primary_compute_unit if self.success else None
+            ),
+            layer_counts=self.layer_counts if self.success else None,
+            tool_versions=self.tool_versions,
         )
         return metrics
 

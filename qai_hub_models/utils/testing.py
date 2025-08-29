@@ -1,14 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import contextlib
-import os
 import shutil
+from collections import defaultdict
 from collections.abc import Callable
-from datetime import datetime
 from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
@@ -20,26 +20,42 @@ import pytest
 import qai_hub as hub
 from qai_hub.client import SourceModelType
 from tabulate import tabulate
-from torch.utils.data import DataLoader, Sampler
 
-from qai_hub_models.datasets import DatasetSplit, get_dataset_from_name
+from qai_hub_models.datasets.common import get_folder_name
 from qai_hub_models.models.common import TargetRuntime
+from qai_hub_models.scorecard import ScorecardDevice
 from qai_hub_models.utils.asset_loaders import (
     always_answer_prompts,
     load_yaml,
     qaihm_temp_dir,
 )
-from qai_hub_models.utils.base_model import BaseModel
-from qai_hub_models.utils.evaluate import get_dataset_path
+from qai_hub_models.utils.base_model import (
+    BaseModel,
+    BasePrecompiledModel,
+    CollectionModel,
+)
+from qai_hub_models.utils.evaluate import (
+    CACHE_SAMPLES_PER_JOB_FILE,
+    get_dataset_path,
+    get_torch_val_dataloader,
+)
 from qai_hub_models.utils.inference import (
     AsyncOnDeviceResult,
     dataset_entries_from_batch,
 )
 from qai_hub_models.utils.input_spec import InputSpec
 from qai_hub_models.utils.quantization import get_calibration_data
-
-# If a model has many outputs, how many of them to store PSNR for
-MAX_PSNR_VALUES = 10
+from qai_hub_models.utils.testing_async_utils import (  # noqa: F401
+    append_line_to_file,
+    get_artifact_filepath,
+    get_artifacts_dir_opt,
+    get_compile_job_ids_file,
+    get_dataset_ids_file,
+    get_inference_job_ids_file,
+    get_profile_job_ids_file,
+    get_quantize_job_ids_file,
+    is_hub_testing_async,
+)
 
 
 def skip_clone_repo_check(func):
@@ -129,23 +145,6 @@ def assert_most_close(
     ), f"More than {diff_tol * 100}% of values were not close."
 
 
-def mock_first_n(fn: Callable, n: int):
-    """
-    Return a function that returns a Mock object for the first N calls
-    and calls the given fn on all subsequent calls.
-    """
-    call_count = 0
-
-    def mock_fn(*args, **kwargs):
-        nonlocal call_count
-        call_count += 1
-        if call_count <= n:
-            return mock.Mock()
-        return fn(*args, **kwargs)
-
-    return mock_fn
-
-
 def mock_on_device_model_call(inference_job: hub.InferenceJob) -> Callable:
     def mock_call(self, *args):
         return AsyncOnDeviceResult(
@@ -182,96 +181,46 @@ def verify_io_names(model_cls: type[BaseModel]) -> None:
         assert "-" not in input_name, "input name cannot contain `-`"
 
 
-def is_hub_testing_async() -> bool:
-    return bool(os.environ.get("TEST_HUB_ASYNC", 0))
-
-
-def should_run_skipped_models() -> bool:
-    return bool(os.environ.get("RUN_ALL_SKIPPED_MODELS", 0))
-
-
-def get_artifacts_dir_opt() -> Path | None:
-    adir = os.environ.get("ARTIFACTS_DIR", None)
-    return Path(adir) if adir else None
-
-
-def get_artifacts_dir() -> Path:
-    adir = get_artifacts_dir_opt()
-    assert (
-        adir
-    ), "Attempted to access artifacts dir, but $ARTIFACTS_DIR cli variable is not set"
-    return Path(adir)
-
-
-def get_artifact_filepath(filename, artifacts_dir: os.PathLike | str | None = None):
-    path = Path(artifacts_dir or get_artifacts_dir()) / filename
-    path.touch()
-    return path
-
-
-def get_dataset_ids_file(artifacts_dir: os.PathLike | str | None = None) -> Path:
-    return get_artifact_filepath("dataset_ids.yaml", artifacts_dir)
-
-
-def get_compile_job_ids_file(artifacts_dir: os.PathLike | str | None = None) -> Path:
-    return get_artifact_filepath("compile-jobs.yaml", artifacts_dir)
-
-
-def get_profile_job_ids_file(artifacts_dir: os.PathLike | str | None = None) -> Path:
-    return get_artifact_filepath("profile-jobs.yaml", artifacts_dir)
-
-
-def get_inference_job_ids_file(artifacts_dir: os.PathLike | str | None = None) -> Path:
-    return get_artifact_filepath("inference-jobs.yaml", artifacts_dir)
-
-
-def get_quantize_job_ids_file(artifacts_dir: os.PathLike | str | None = None) -> Path:
-    return get_artifact_filepath("quantize-jobs.yaml", artifacts_dir)
-
-
-def get_job_date(artifacts_dir: os.PathLike | str | None = None) -> str:
-    date_file = get_artifact_filepath("date.txt", artifacts_dir)
-    if date_file.stat().st_size == 0:
-        curr_date = datetime.today().strftime("%Y-%m-%d")
-        with open(date_file, "w") as f:
-            f.write(curr_date)
-        return curr_date
-    with open(date_file) as f:
-        return f.read()
-
-
-def get_accuracy_file() -> Path:
-    filepath = get_artifact_filepath("accuracy.csv")
-    if filepath.stat().st_size == 0:
-        with open(filepath, "w") as f:
-            f.write("model_id,runtime,Torch Accuracy,Sim Accuracy,Device Accuracy")
-            for i in range(MAX_PSNR_VALUES):
-                f.write(f",PSNR_{i}")
-            f.write(",date,branch\n")
-    return filepath
-
-
 def mock_tabulate_fn(df: pd.DataFrame, **kwargs) -> tuple[list[str], str]:
     psnr_values = []
     for i, (_, value) in enumerate(df.iterrows()):
         psnr_values.append(value.psnr)
-    return psnr_values, tabulate(df, **kwargs)  # type: ignore
+    return psnr_values, tabulate(df, **kwargs)  # pyright: ignore[reportArgumentType]
 
 
 def get_and_sync_datasets_cache_dir(
-    has_channel_transpose: bool, dataset_name: str, split_size: int
+    has_channel_transpose: bool,
+    dataset_name: str,
+    samples_per_job: int,
+    model_cls: type[BaseModel] | type[CollectionModel],
 ) -> Path:
     folder_name = "hub_datasets"
     if not has_channel_transpose:
         folder_name += "_nt"
-    dir_path = get_artifacts_dir() / folder_name / dataset_name
+    assert issubclass(model_cls, BaseModel)
+    dataset_folder_name = get_folder_name(dataset_name, model_cls.get_input_spec())
+    dir_path = get_artifacts_dir_opt() / folder_name / dataset_folder_name
     if dir_path.exists():
         return dir_path
     with qaihm_temp_dir() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        dataset_ids = load_yaml(get_dataset_ids_file())
-        input_key, gt_key = get_val_dataset_id_keys(dataset_name, has_channel_transpose)
-        with open(tmp_path / f"split_size_{split_size}.txt", "w") as f:
+        dataset_ids_filepath = get_dataset_ids_file()
+        dataset_ids = load_yaml(dataset_ids_filepath)
+        input_key, gt_key = get_val_dataset_id_keys(
+            dataset_folder_name, has_channel_transpose
+        )
+        # In most cases, the input and gt validation data have been created
+        # and stored in the dataset_ids yaml. In the rare case it isn't, do so here.
+        if input_key not in dataset_ids or gt_key not in dataset_ids:
+            get_hub_val_dataset(
+                dataset_name,
+                dataset_ids_filepath,
+                model_cls,
+                has_channel_transpose,
+                samples_per_job,
+            )
+            dataset_ids = load_yaml(dataset_ids_filepath)
+        with open(tmp_path / f"samples_per_job_{samples_per_job}.txt", "w") as f:
             f.write(dataset_ids[input_key] + " " + dataset_ids[gt_key])
 
         cache_path = tmp_path / "cache"
@@ -282,45 +231,28 @@ def get_and_sync_datasets_cache_dir(
         hub.get_dataset(dataset_ids[gt_key]).download(
             str(get_dataset_path(cache_path, dataset_ids[gt_key]))
         )
-        with open(cache_path / "current_split_size.txt", "w") as f:
-            f.write(str(split_size) + "\n")
+        with open(cache_path / CACHE_SAMPLES_PER_JOB_FILE, "w") as f:
+            f.write(str(samples_per_job) + "\n")
 
         dir_path.parent.mkdir(parents=True, exist_ok=True)
         shutil.move(tmp_path, dir_path)
     return dir_path
 
 
-def append_line_to_file(path: Path, line: str) -> None:
-    with open(path, "a") as f:
-        f.write(line + "\n")
-
-
 def mock_get_calibration_data(
-    input_spec: InputSpec, dataset_name: str, num_samples: int
+    model: BaseModel, input_spec: InputSpec, num_samples: int
 ) -> hub.Dataset:
-    cache_key = dataset_name + "_train"
+    cache_prefix_name = model.calibration_dataset_name() or model.__class__.__name__
+    cache_prefix = get_folder_name(cache_prefix_name, input_spec)
+    cache_key = cache_prefix + "_train"
     dataset_ids_file = get_dataset_ids_file()
     dataset_ids = load_yaml(dataset_ids_file)
     if dataset_ids and cache_key in dataset_ids:
         return hub.get_dataset(dataset_ids[cache_key])
-    dataset = get_calibration_data(input_spec, dataset_name, num_samples)
+    dataset = get_calibration_data(model, input_spec, num_samples)
     hub_dataset = hub.upload_dataset(dataset)
     append_line_to_file(dataset_ids_file, f"{cache_key}: {hub_dataset.dataset_id}")
     return hub_dataset
-
-
-class EveryNSampler(Sampler):
-    """Samples every N samples deterministically from a torch dataset."""
-
-    def __init__(self, n: int, num_samples: int):
-        self.n = n
-        self.num_samples = num_samples
-
-    def __iter__(self):
-        return iter(range(0, self.num_samples * self.n, self.n))
-
-    def __len__(self):
-        return self.num_samples
 
 
 def get_val_dataset_id_keys(
@@ -332,51 +264,12 @@ def get_val_dataset_id_keys(
     return base_name + "input", base_name + "gt"
 
 
-def get_torch_val_dataloader(dataset_name: str, num_samples: int) -> DataLoader:
-    """
-    Creates a torch dataloader with a chunk of validation data from the given dataset.
-
-    The dataset is sampled by taking every N samples for the largest possible N
-    that produces the number of requested samples.
-
-    Parameters:
-        dataset_name: Name of the dataset. Dataset must be registered in
-            qai_hub_models.datasets.__init__.py
-        num_samples: Number of samples to sample from the full dataset.
-    """
-    torch_val_dataset = get_dataset_from_name(dataset_name, DatasetSplit.VAL)
-    sampler = EveryNSampler(
-        n=len(torch_val_dataset) // num_samples, num_samples=num_samples
-    )
-    return DataLoader(torch_val_dataset, batch_size=num_samples, sampler=sampler)
-
-
-def write_accuracy(
-    model_name: str,
-    runtime: TargetRuntime,
-    psnr_values: list[str],
-    torch_accuracy: float | None = None,
-    device_accuracy: float | None = None,
-    sim_accuracy: float | None = None,
-) -> None:
-    line = f"{model_name},{runtime.name.lower()},"
-    line += f"{torch_accuracy:.3g}," if torch_accuracy is not None else ","
-    line += f"{sim_accuracy:.3g}," if sim_accuracy is not None else ","
-    line += f"{device_accuracy:.3g}," if device_accuracy is not None else ","
-    if len(psnr_values) >= MAX_PSNR_VALUES:
-        line += ",".join(psnr_values[:10])
-    else:
-        line += ",".join(psnr_values) + "," * (MAX_PSNR_VALUES - len(psnr_values))
-    line += f",{get_job_date()},main"
-    append_line_to_file(get_accuracy_file(), line)
-
-
 def get_hub_val_dataset(
     dataset_name: str,
     ids_file: Path,
-    model_cls: type[BaseModel],
+    model_cls: type[BaseModel] | type[CollectionModel],
     apply_channel_transpose: bool,
-    num_samples: int,
+    num_samples: int | None = None,
 ) -> hub.Dataset:
     """
     Creates a hub dataset with a chunk of validation data from the given dataset.
@@ -389,6 +282,10 @@ def get_hub_val_dataset(
     The dataset is sampled by taking every N samples for the largest possible N
     that produces the number of requested samples.
 
+    The dataset is produced using the input spec and channel last inputs of a
+    representative model. The assumption being that all models using this dataset
+    have the same values for both of those things.
+
     Parameters:
         dataset_name: Name of the dataset. Dataset must be registered in
             qai_hub_models.datasets.__init__.py
@@ -399,16 +296,21 @@ def get_hub_val_dataset(
             If True, applies channel last transpose for the inputs specified by the model.
         num_samples: Number of samples to sample from the full dataset.
     """
+    assert issubclass(
+        model_cls, BaseModel
+    ), "CollectionModel is not yet supported by this function."
     dataset_ids = load_yaml(ids_file)
-    input_key, gt_key = get_val_dataset_id_keys(dataset_name, apply_channel_transpose)
+    input_spec = model_cls.get_input_spec()
+    folder_name = get_folder_name(dataset_name, input_spec)
+    input_key, gt_key = get_val_dataset_id_keys(folder_name, apply_channel_transpose)
     if dataset_ids and input_key in dataset_ids:
         assert gt_key in dataset_ids
         return hub.get_dataset(dataset_ids[input_key])
-    dataloader = get_torch_val_dataloader(dataset_name, num_samples)
+    dataloader = get_torch_val_dataloader(dataset_name, num_samples, input_spec)
     batch = next(iter(dataloader))
     input_entries, gt_entries = dataset_entries_from_batch(
         batch,
-        list(model_cls.get_input_spec().keys()),
+        list(input_spec.keys()),
         model_cls.get_channel_last_inputs() if apply_channel_transpose else [],
     )
 
@@ -429,9 +331,10 @@ def patch_qai_hub(model_type: SourceModelType = SourceModelType.ONNX):
             mock_hub.submit_profile_job.assert_called()
     """
     # Model
-    model = mock.Mock()
+    model = mock.Mock(hub.Model)
     model.model_id = "mabcd1234"
     model.model_type = model_type
+    model.metadata = defaultdict(lambda: "2.33")
 
     def _store_device(mock_obj, *args, **kwargs):
         if "device" in kwargs:
@@ -504,7 +407,9 @@ def patch_qai_hub(model_type: SourceModelType = SourceModelType.ONNX):
         "qai_hub.submit_quantize_job", mock_submit_quantize_job
     )
 
-    with patch_hub_compile, patch_hub_profile, patch_hub_inference, patch_hub_link, patch_hub_quantize:
+    with (
+        patch_hub_compile
+    ), patch_hub_profile, patch_hub_inference, patch_hub_link, patch_hub_quantize:
         # Yield mocks to allow assertions
         yield SimpleNamespace(
             submit_compile_job=mock_submit_compile_job,
@@ -513,3 +418,55 @@ def patch_qai_hub(model_type: SourceModelType = SourceModelType.ONNX):
             submit_link_job=mock_submit_link_job,
             submit_quantize_job=mock_submit_quantize_job,
         )
+
+
+def has_get_unsupported_reason(cls: type, stop_at_classes: list[type]) -> bool:
+    """
+    Check whether the 'get_unsupported_reason' attribute is defined in the given class
+    or any of its parent classes up to (but not including) any class in stop_at_classes.
+
+    Parameters:
+        cls (type): The class to check.
+        stop_at_classes (list[type]): A list of classes at which to stop the search in the MRO.
+
+    Returns:
+        bool: True if 'get_unsupported_reason' is found in cls or one of its parent classes
+              before reaching any of the stop_at_classes; False otherwise.
+    """
+    for base in cls.__mro__:
+        if base in stop_at_classes:
+            break
+        if "get_unsupported_reason" in base.__dict__:
+            return True
+    return False
+
+
+def _skip_if_unsupported_reason(
+    model_cls: type[BaseModel] | type[BasePrecompiledModel],
+    runtime: TargetRuntime,
+    device: ScorecardDevice,
+):
+    if not has_get_unsupported_reason(model_cls, [BaseModel, BasePrecompiledModel]):
+        return
+    # check get_unsupported_reason
+    if issubclass(model_cls, BaseModel):
+        model = model_cls.from_pretrained()
+    else:
+        model = model_cls.from_precompiled()  # type: ignore
+    hub_device = device.execution_device
+    reason = model.get_unsupported_reason(runtime, hub_device)  # type: ignore
+    if reason:
+        pytest.xfail(reason)
+
+
+def skip_invalid_runtime_device(
+    model_cls: type[BaseModel] | type[BasePrecompiledModel] | type[CollectionModel],
+    runtime: TargetRuntime,
+    device: ScorecardDevice,
+) -> None:
+    if issubclass(model_cls, CollectionModel):
+        for component_cls in model_cls.component_classes:
+            _skip_if_unsupported_reason(component_cls, runtime, device)
+        return
+    # BaseModel or BasePrecompiledModel
+    _skip_if_unsupported_reason(model_cls, runtime, device)

@@ -5,6 +5,7 @@
         "**/__pycache__",
         "**/node_modules",
         "build/tungsten",
+        "qaihm-dev",
         "src/public/staging_python/qai_hub_staging",
         "src/tungsten",
         "src/www/onnx-optimizer/third_party",
@@ -15,12 +16,10 @@
         "./build/proto"
     ],
 
+    "reportIncompatibleMethodOverride": "none",
     "reportMissingModuleSource": "none",
     "reportMissingImports": true,
     "reportMissingTypeStubs": false,
     "reportShadowedImports": false,
     "verboseOutput": false,
-
-    "venvPath": ".",
-    "venv": "qaism-dev"
 }

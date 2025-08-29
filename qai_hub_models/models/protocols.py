@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 """
 This file defines type helpers. Specifically, those helpers are python Protocols.
 
@@ -11,7 +12,7 @@ For example, a function may take any class that implements FromPretrained.
 The parameter would be typed "FromPretrainedProtocol", as defined in this file.
 
 Protocols may also be inherited to declare that a class must implement said protocol.
-For example, AIMETQuantizableMixin inherits HubModelProtocol. This informs the type
+For example, AIMETOnnxQuantizableMixin inherits HubModelProtocol. This informs the type
 checker that the class that inherits the mixin must implement HubModelProtocol.
 
 These are type checked at compile time.
@@ -26,6 +27,7 @@ from qai_hub.client import DatasetEntries, Device, SourceModel
 
 from qai_hub_models.evaluators.base_evaluators import BaseEvaluator, _DataLoader
 from qai_hub_models.models.common import (
+    Precision,
     SampleInputsType,
     SourceModelFormat,
     TargetRuntime,
@@ -129,7 +131,6 @@ class QuantizableModelProtocol(Protocol):
     @abstractmethod
     def get_calibration_data(
         self,
-        target_runtime: TargetRuntime | None = None,
         input_spec: InputSpec | None = None,
     ) -> DatasetEntries | None:
         """
@@ -141,6 +142,7 @@ class QuantizableModelProtocol(Protocol):
 T = TypeVar("T", covariant=True)
 
 
+@runtime_checkable
 class ExecutableModelProtocol(Generic[T], Protocol):
     """
     Classes follow this protocol if they are executable.
@@ -213,12 +215,12 @@ class PretrainedHubModelProtocol(HubModelProtocol, FromPretrainedProtocol, Proto
         check_trace: bool = True,
         external_onnx_weights: bool = False,
         output_names: Optional[list[str]] = None,
-    ) -> SourceModel:
-        ...
+    ) -> SourceModel: ...
 
     def get_hub_compile_options(
         self,
         target_runtime: TargetRuntime,
+        precision: Precision,
         other_compile_options: str = "",
         device: Optional[Device] = None,
     ) -> str:
@@ -232,6 +234,12 @@ class PretrainedHubModelProtocol(HubModelProtocol, FromPretrainedProtocol, Proto
     ) -> SourceModelFormat:
         """
         Source model format preferred for conversion on AI Hub.
+        """
+        ...
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        """
+        AI Hub quantize options recommended for the model.
         """
         ...
 

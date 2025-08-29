@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -65,7 +66,7 @@ def _load_cityscapes_loader(cityscapes_path: Optional[str] = None) -> object:
 
 
 def preprocess_cityscapes_image(image: Image) -> torch.Tensor:
-    out_tensor: torch.Tensor = standard_transforms.ToTensor()(image)  # type: ignore
+    out_tensor: torch.Tensor = standard_transforms.ToTensor()(image)
     return out_tensor.unsqueeze(0)
 
 

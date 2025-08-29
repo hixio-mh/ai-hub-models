@@ -1,8 +1,11 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
+
+from PIL import Image
 
 from qai_hub_models.models._shared.deeplab.app import DeepLabV3App
 from qai_hub_models.utils.args import (
@@ -51,6 +54,7 @@ def deeplabv3_demo(
 
     # Run app
     image_annotated = app.predict(input_image, False)
+    assert isinstance(image_annotated, Image.Image)
 
     # Resize / unpad annotated image
     image_annotated = pil_undo_resize_pad(

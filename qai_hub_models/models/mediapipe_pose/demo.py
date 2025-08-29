@@ -1,8 +1,10 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import argparse
+from typing import cast
 
 import numpy as np
 from PIL import Image
@@ -64,21 +66,20 @@ def main(is_test: bool = False):
     print("Use Ctrl+C in your terminal to exit.")
 
     # Load app
-    app = MediaPipePoseApp(
-        MediaPipePose.from_pretrained(), args.score_threshold, args.iou_threshold
-    )
+    app = MediaPipePoseApp.from_pretrained(MediaPipePose.from_pretrained())
     print("Model and App Loaded")
 
     if args.image:
         image = load_image(args.image).convert("RGB")
         pred_image = app.predict_landmarks_from_image(image)
+        assert isinstance(pred_image[0], np.ndarray)
         out = Image.fromarray(pred_image[0], "RGB")
         if not is_test:
             display_or_save_image(out, args.output_dir)
     else:
 
         def frame_processor(frame: np.ndarray) -> np.ndarray:
-            return app.predict_landmarks_from_image(frame)[0]  # type: ignore
+            return cast(np.ndarray, app.predict_landmarks_from_image(frame)[0])
 
         capture_and_display_processed_frames(
             frame_processor, "QAIHM Mediapipe Pose Demo", args.camera

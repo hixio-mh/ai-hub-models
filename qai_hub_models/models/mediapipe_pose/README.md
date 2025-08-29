@@ -1,9 +1,6 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
+# [MediaPipe-Pose-Estimation: Detect and track human face, hand, and torso in real-time images and video streams](https://aihub.qualcomm.com/models/mediapipe_pose)
 
-
-# [MediaPipe-Pose-Estimation: Detect and track human body poses in real-time images and video streams](https://aihub.qualcomm.com/models/mediapipe_pose)
-
-The MediaPipe Pose Landmark Detector is a machine learning pipeline that predicts bounding boxes and pose skeletons of poses in an image.
+The MediaPipe Pose Landmark Detector is a machine learning pipeline that predicts bounding boxes and pose skeletons of the face, hands, and torso in an image.
 
 This is based on the implementation of MediaPipe-Pose-Estimation found [here](https://github.com/zmurez/MediaPipePyTorch/). This repository contains scripts for optimized on-device
 export suitable to run on Qualcomm® devices. More details on model performance
@@ -15,6 +12,11 @@ accross various devices, can be found [here](https://aihub.qualcomm.com/models/m
 
 
 ## Example & Usage
+
+Install the package via pip:
+```bash
+pip install qai-hub-models
+```
 
 
 Once installed, run the following simple CLI demo:
@@ -35,8 +37,7 @@ on-device deployment. This can be run as follows:
 ```bash
 python -m qai_hub_models.models.mediapipe_pose.export
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -54,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

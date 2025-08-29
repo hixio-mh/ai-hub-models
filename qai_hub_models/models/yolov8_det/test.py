@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 import torch
 from ultralytics import YOLO as ultralytics_YOLO
@@ -20,7 +21,7 @@ from qai_hub_models.utils.image_processing import preprocess_PIL_image
 from qai_hub_models.utils.testing import skip_clone_repo_check
 
 OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
-    MODEL_ID, MODEL_ASSET_VERSION, "test_images/output_image.png"
+    MODEL_ID, MODEL_ASSET_VERSION, "test_images/output_image_class_dependent_nms.png"
 )
 WEIGHTS = "yolov8n.pt"
 

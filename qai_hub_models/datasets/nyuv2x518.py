@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from qai_hub_models.datasets.common import DatasetSplit
 from qai_hub_models.datasets.nyuv2 import NyUv2Dataset
 
@@ -16,6 +17,13 @@ class NyUv2x518Dataset(NyUv2Dataset):
         input_height: int = 518,
         input_width: int = 518,
         split: DatasetSplit = DatasetSplit.TRAIN,
-        num_samples: int = 100,
+        num_samples: int = -1,
     ):
         super().__init__(input_height, input_width, split, num_samples)
+
+    @staticmethod
+    def default_samples_per_job() -> int:
+        """
+        The default value for how many samples to run in each inference job.
+        """
+        return 100

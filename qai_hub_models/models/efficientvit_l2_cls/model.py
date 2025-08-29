@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
@@ -28,6 +29,12 @@ class EfficientViT(ImagenetClassifier):
             EFFICIENTVIT_SOURCE_REPO_COMMIT,
             MODEL_ID,
             MODEL_ASSET_VERSION,
+            imported_but_unused_modules=[
+                "onnxsim",
+                "torchpack",
+                "torchpack.distributed",
+                "timm.data.auto_augment",
+            ],
         ):
             from efficientvit.cls_model_zoo import create_cls_model
 

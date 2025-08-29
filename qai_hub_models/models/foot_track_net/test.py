@@ -1,14 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import json
 
 import numpy as np
 import pytest
-import torch
 
-from qai_hub_models.models._shared.foot_track_net.app import FootTrackNet_App
+from qai_hub_models.models.foot_track_net.app import FootTrackNet_App
 from qai_hub_models.models.foot_track_net.demo import main as demo_main
 from qai_hub_models.models.foot_track_net.model import (
     MODEL_ASSET_VERSION,
@@ -20,7 +20,7 @@ from qai_hub_models.utils.asset_loaders import (
     load_image,
     load_path,
 )
-from qai_hub_models.utils.image_processing import resize_pad
+from qai_hub_models.utils.image_processing import pil_resize_pad
 from qai_hub_models.utils.testing import assert_most_close, skip_clone_repo_check
 
 INPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
@@ -33,7 +33,7 @@ OUTPUT_RST_ADDRESS = CachedWebModelAsset.from_asset_store(
 
 # Verify that the output from Torch is as expected. bbox, landmark, visibility
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
 
     # error tolerance
     diff_tol = 0.1
@@ -41,18 +41,16 @@ def test_task():
     rtol = 0.1
 
     app = FootTrackNet_App(FootTrackNet.from_pretrained())
-
     (_, _, height, width) = FootTrackNet.get_input_spec()["image"][0]
-    orig_image = np.array(load_image(INPUT_IMAGE_ADDRESS))
-    orig_image = torch.from_numpy(orig_image).permute(2, 0, 1).unsqueeze_(0)
-    image, scale, padding = resize_pad(orig_image, (height, width))
-    objs_face, objs_person = app.det_image(image)
+    image, *_ = pil_resize_pad(load_image(INPUT_IMAGE_ADDRESS), (height, width))
+    objs_face, objs_person = app.predict_bbox_landmarks(image)
 
     pth = load_path(OUTPUT_RST_ADDRESS, "tmp")
     with open(pth) as f:
         rst = json.load(f)
 
     # extract the key detection result
+    assert objs_person[0].landmark is not None
     persons_landmark = np.array(
         [
             [
@@ -62,6 +60,7 @@ def test_task():
             ]
         ]
     )
+    assert objs_person[0].vis is not None
     persons_visibility = np.array([[objs_person[0].vis[15], objs_person[0].vis[16]]])
 
     # assert, face_bbox, person_bbox, person_landmark and person_landmark_visibility
@@ -97,23 +96,22 @@ def test_task():
 
 @pytest.mark.trace
 @skip_clone_repo_check
-def test_trace():
+def test_trace() -> None:
     # error tolerance
     diff_tol = 0.1
     atol = 5
     rtol = 0.1
     app = FootTrackNet_App(FootTrackNet.from_pretrained().convert_to_torchscript())
     (_, _, height, width) = FootTrackNet.get_input_spec()["image"][0]
-    orig_image = np.array(load_image(INPUT_IMAGE_ADDRESS))
-    orig_image = torch.from_numpy(orig_image).permute(2, 0, 1).unsqueeze_(0)
-    image, scale, padding = resize_pad(orig_image, (height, width))
-    objs_face, objs_person = app.det_image(image)
+    image, *_ = pil_resize_pad(load_image(INPUT_IMAGE_ADDRESS), (height, width))
+    objs_face, objs_person = app.predict_bbox_landmarks(image)
 
     pth = load_path(OUTPUT_RST_ADDRESS, "tmp")
     with open(pth) as f:
         rst = json.load(f)
 
     # extract the key detection result
+    assert objs_person[0].landmark is not None
     persons_landmark = np.array(
         [
             [
@@ -124,6 +122,7 @@ def test_trace():
         ]
     )
 
+    assert objs_person[0].vis is not None
     persons_visibility = np.array([[objs_person[0].vis[15], objs_person[0].vis[16]]])
 
     # assert, face_bbox, person_bbox, person_landmark and person_landmark_visibility
@@ -158,5 +157,5 @@ def test_trace():
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

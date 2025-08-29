@@ -1,15 +1,17 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
 from typing import Optional
 
+import numpy as np
 from PIL.Image import Image
-from PIL.ImageShow import IPythonViewer, _viewers  # type: ignore
+from PIL.ImageShow import IPythonViewer, _viewers  # type: ignore[attr-defined]
 
 ALWAYS_DISPLAY_VAR = "QAIHM_ALWAYS_DISPLAY_OUTPUT"
 
@@ -34,6 +36,16 @@ def save_image(image: Image, base_dir: str, filename: str, desc: str):
     print(f"Saving {desc} to {filename}")
 
 
+def is_headless() -> bool:
+    if os.environ.get(ALWAYS_DISPLAY_VAR) == "1":
+        return False
+
+    return (
+        os.environ.get("SSH_TTY") is not None
+        or os.environ.get("SSH_CLIENT") is not None
+    )
+
+
 def display_image(image: Image, desc: str = "image") -> bool:
     """
     Attempt to display image.
@@ -48,9 +60,7 @@ def display_image(image: Image, desc: str = "image") -> bool:
                 return True
 
     try:
-        if os.environ.get(ALWAYS_DISPLAY_VAR) == "1" or not (
-            os.environ.get("SSH_TTY") or os.environ.get("SSH_CLIENT")
-        ):
+        if not is_headless():
             print(f"Displaying {desc}")
             image.show()
             return True
@@ -96,3 +106,19 @@ def display_or_save_image(
 
     save_image(image, os.path.join(Path.cwd(), "build"), filename, desc)
     return False
+
+
+def to_uint8(image: np.ndarray) -> np.ndarray:
+    """
+    Converts a numpy array image to uint8 type. Values are clipped the values
+    to the range [0, 255].
+
+    Parameters:
+    image (numpy array): The input image array.
+
+    Returns:
+    numpy array: The processed image in uint8 format.
+    """
+    clipped_image = np.clip(image, 0, 1)
+    uint8_image = np.round(clipped_image * 255).astype(np.uint8)
+    return uint8_image

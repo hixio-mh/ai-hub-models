@@ -1,8 +1,9 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
-from qai_hub_models.models._shared.foot_track_net.app import (  # noqa: F401
+
+from qai_hub_models.models.foot_track_net.app import (  # noqa: F401
     FootTrackNet_App as App,
 )
 

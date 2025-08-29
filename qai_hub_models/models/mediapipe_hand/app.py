@@ -1,8 +1,11 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
+
+from typing import Callable, cast
 
 import cv2
 import numpy as np
@@ -18,8 +21,8 @@ from qai_hub_models.models.mediapipe_hand.model import (
     MIDDLE_FINDER_KEYPOINT_INDEX,
     ROTATION_VECTOR_OFFSET_RADS,
     WRIST_CENTER_KEYPOINT_INDEX,
-    MediaPipeHand,
 )
+from qai_hub_models.utils.base_model import CollectionModel
 from qai_hub_models.utils.bounding_box_processing import (
     compute_box_affine_crop_resize_matrix,
 )
@@ -29,6 +32,7 @@ from qai_hub_models.utils.image_processing import (
     apply_batched_affines_to_frame,
     numpy_image_to_torch,
 )
+from qai_hub_models.utils.input_spec import InputSpec
 
 
 class MediaPipeHandApp(MediaPipeApp):
@@ -44,7 +48,13 @@ class MediaPipeHandApp(MediaPipeApp):
 
     def __init__(
         self,
-        model: MediaPipeHand,
+        hand_detector: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
+        hand_landmark_detector: Callable[
+            [torch.Tensor], tuple[torch.Tensor, torch.Tensor]
+        ],
+        anchors: torch.Tensor,
+        hand_detector_input_spec: InputSpec,
+        landmark_detector_input_spec: InputSpec,
         min_detector_hand_box_score: float = 0.95,
         nms_iou_threshold: float = 0.3,
         min_landmark_score: float = 0.5,
@@ -59,11 +69,17 @@ class MediaPipeHandApp(MediaPipeApp):
         See parent initializer for further parameter documentation.
         """
         super().__init__(
-            model.hand_detector,
-            model.hand_detector.anchors,
-            model.hand_landmark_detector,
-            model.hand_detector.get_input_spec()["image"][0][-2:],
-            model.hand_landmark_detector.get_input_spec()["image"][0][-2:],
+            hand_detector,
+            anchors,
+            hand_landmark_detector,
+            cast(
+                tuple[int, int],
+                hand_detector_input_spec["image"][0][-2:],
+            ),
+            cast(
+                tuple[int, int],
+                landmark_detector_input_spec["image"][0][-2:],
+            ),
             WRIST_CENTER_KEYPOINT_INDEX,
             MIDDLE_FINDER_KEYPOINT_INDEX,
             ROTATION_VECTOR_OFFSET_RADS,
@@ -80,12 +96,15 @@ class MediaPipeHandApp(MediaPipeApp):
         self,
         pixel_values_or_image: torch.Tensor | np.ndarray | Image | list[Image],
         raw_output: bool = False,
-    ) -> tuple[
-        list[torch.Tensor | None],
-        list[torch.Tensor | None],
-        list[torch.Tensor | None],
-        list[list[bool] | None],
-    ] | list[np.ndarray]:
+    ) -> (
+        tuple[
+            list[torch.Tensor],
+            list[torch.Tensor],
+            list[torch.Tensor],
+            list[list[bool]],
+        ]
+        | list[np.ndarray]
+    ):
         """
         From the provided image or tensor, predict the bounding boxes & classes of the hand detected within.
 
@@ -97,7 +116,7 @@ class MediaPipeHandApp(MediaPipeApp):
 
             If raw_output is false, returns an additional output:
 
-                batched_is_right_hand: list[list[bool] | None]]
+                batched_is_right_hand: list[list[bool]]]
                     Whether each landmark represents a right (True) or left (False) hand.
                     Organized like the following:
                     [
@@ -108,27 +127,29 @@ class MediaPipeHandApp(MediaPipeApp):
                             ...
                         ]
                         # Batch 1 (for Input Image 1)
-                        None # (this image has no detected palm)
+                        [] # (this image has no detected palm)
                         ...
                     ]
         """
-        return super().predict_landmarks_from_image(pixel_values_or_image, raw_output)  # type: ignore
+        return super().predict_landmarks_from_image(
+            pixel_values_or_image, raw_output
+        )  # type: ignore[return-value]
 
     def _draw_predictions(
         self,
         NHWC_int_numpy_frames: list[np.ndarray],
-        batched_selected_boxes: list[torch.Tensor | None],
-        batched_selected_keypoints: list[torch.Tensor | None],
-        batched_roi_4corners: list[torch.Tensor | None],
-        batched_selected_landmarks: list[torch.Tensor | None],
-        batched_is_right_hand: list[list[bool] | None],
+        batched_selected_boxes: list[torch.Tensor],
+        batched_selected_keypoints: list[torch.Tensor],
+        batched_roi_4corners: list[torch.Tensor],
+        batched_selected_landmarks: list[torch.Tensor],
+        batched_is_right_hand: list[list[bool]],
     ):
         """
         Override of mediapipe::app.py::MediaPipeApp::draw_outputs
         Also draws whether the detection is a right or left hand.
 
         Additional inputs:
-            batched_is_right_hand: list[list[bool] | None]
+            batched_is_right_hand:
                 True if the detection is a right hand, false if it's a left hand. None if no hand detected.
         """
         for batch_idx in range(len(NHWC_int_numpy_frames)):
@@ -139,9 +160,13 @@ class MediaPipeHandApp(MediaPipeApp):
             roi_4corners = batched_roi_4corners[batch_idx]
             irh = batched_is_right_hand[batch_idx]
 
-            if box is not None and kp is not None and roi_4corners is not None:
+            if (
+                box.nelement() != 0
+                and kp.nelement() != 0
+                and roi_4corners.nelement() != 0
+            ):
                 self._draw_box_and_roi(image, box, kp, roi_4corners)
-            if ld is not None and irh is not None:
+            if ld.nelement() != 0 and len(irh) != 0:
                 self._draw_landmarks(image, ld, irh)
 
     def _draw_landmarks(
@@ -170,8 +195,8 @@ class MediaPipeHandApp(MediaPipeApp):
     def _run_landmark_detector(
         self,
         NHWC_int_numpy_frames: list[np.ndarray],
-        batched_roi_4corners: list[torch.Tensor | None],
-    ) -> tuple[list[torch.Tensor | None], list[list[bool] | None]]:
+        batched_roi_4corners: list[torch.Tensor],
+    ) -> tuple[list[torch.Tensor], list[list[bool]]]:
         """
         Override of mediapipe::app.py::MediaPipeApp::run_landmark_detector
         Additionally returns whether the detection is a right or left hand.
@@ -182,16 +207,16 @@ class MediaPipeHandApp(MediaPipeApp):
         # where K == number of landmark keypoints, 3 == (x, y, confidence)
         #
         # A list element will be None if there is no ROI.
-        batched_selected_landmarks: list[torch.Tensor | None] = []
+        batched_selected_landmarks: list[torch.Tensor] = []
 
         # whether the selected landmarks for the ROI (if applicable) are for a left or right hand
         #
         # A list element will be None if there is no ROI.
-        batched_is_right_hand: list[list[bool] | None] = []
+        batched_is_right_hand: list[list[bool]] = []
 
         # For each input image...
         for batch_idx, roi_4corners in enumerate(batched_roi_4corners):
-            if roi_4corners is None:
+            if roi_4corners.nelement() == 0:
                 continue
             affines = compute_box_affine_crop_resize_matrix(
                 roi_4corners[:, :3], self.landmark_input_dims
@@ -205,9 +230,7 @@ class MediaPipeHandApp(MediaPipeApp):
             )
 
             # Compute hand landmarks.
-            ld_scores, lr, landmarks = self.landmark_detector(  # type: ignore
-                keypoint_net_inputs
-            )
+            ld_scores, lr, landmarks = self.landmark_detector(keypoint_net_inputs)
 
             # Convert [0-1] ranged values of landmarks to integer pixel space.
             landmarks[:, :, 0] *= self.landmark_input_dims[0]
@@ -235,12 +258,25 @@ class MediaPipeHandApp(MediaPipeApp):
 
             # Add this batch of landmarks to the output list.
             batched_selected_landmarks.append(
-                torch.stack(all_landmarks, dim=0) if all_landmarks else None
+                torch.stack(all_landmarks, dim=0) if all_landmarks else torch.Tensor()
             )
             batched_is_right_hand.append(all_lr)
         else:
             # Add None for these lists, since this batch has no predicted bounding boxes.
-            batched_selected_landmarks.append(None)
-            batched_is_right_hand.append(None)
+            batched_selected_landmarks.append(torch.Tensor())
+            batched_is_right_hand.append([])
 
         return (batched_selected_landmarks, batched_is_right_hand)
+
+    @classmethod
+    def from_pretrained(cls, model: CollectionModel) -> MediaPipeHandApp:
+        from qai_hub_models.models.mediapipe_hand.model import MediaPipeHand
+
+        assert isinstance(model, MediaPipeHand)
+        return cls(
+            model.hand_detector,
+            model.hand_landmark_detector,
+            model.hand_detector.anchors,
+            model.hand_detector.get_input_spec(),
+            model.hand_landmark_detector.get_input_spec(),
+        )

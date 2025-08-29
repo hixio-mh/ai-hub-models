@@ -1,20 +1,25 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 import diffusers
 import torch
-from diffusers.models.embeddings import get_timestep_embedding
 from transformers import CLIPTokenizer
 
 from qai_hub_models.models.protocols import ExecutableModelProtocol
 from qai_hub_models.utils.inference import OnDeviceModel
 
 OUT_H, OUT_W = 512, 512
+
+UNET_EXTRA_INPUT_NAMES = []
+UNET_EXTRA_INPUT_NAMES.extend([f"controlnet_downblock{i}" for i in range(12)])
+UNET_EXTRA_INPUT_NAMES.append("controlnet_midblock")
 
 
 class StableDiffusionApp:
@@ -40,8 +45,9 @@ class StableDiffusionApp:
         unet: ExecutableModelProtocol,
         tokenizer: CLIPTokenizer | Any,
         scheduler: diffusers.DPMSolverMultistepScheduler,
-        time_embedding: diffusers.embeddings.TimeEmbedding,
         channel_last_latent: bool,
+        host_device: torch.device = torch.device("cpu"),
+        controlnet: ExecutableModelProtocol | None = None,
     ):
         """
         Initializes StableDiffusionApp with required neural networks for end-to-end pipeline.
@@ -61,8 +67,6 @@ class StableDiffusionApp:
         scheduler:
             Solver for diffusion steps.
             Updates latent space during each iteration.
-        time_embedding:
-            Projects time-step into embedding used during denoising in latent space.
         channel_last_latent:
             True if unet outputs latent of shape like (1, 64, 64, 4). False
             for (1, 4, 64, 64)
@@ -73,8 +77,9 @@ class StableDiffusionApp:
         self.vae_decoder = vae_decoder
         self.tokenizer = tokenizer
         self.scheduler = scheduler
-        self.time_embedding = time_embedding
         self.channel_last_latent = channel_last_latent
+        self.host_device = host_device
+        self.controlnet = controlnet
 
     def _encode_text_prompt(self, prompt: str) -> tuple[torch.Tensor, torch.Tensor]:
         """
@@ -95,41 +100,45 @@ class StableDiffusionApp:
         cached instead of computed every time. We compute it here for better
         clarity.
         """
-        # Tokenize input prompt
-        text_input = self.tokenizer(
-            prompt,
-            padding="max_length",
-            max_length=self.tokenizer.model_max_length,
-            return_tensors="pt",
-        )
-
-        # Tokenize empty prompt
-        max_length = text_input.input_ids.shape[-1]
-        uncond_input = self.tokenizer(
-            [""],
-            padding="max_length",
-            max_length=max_length,
-            return_tensors="pt",
-        )
-
-        # Embed using the text encoder neural network
-        # Encode input and empty prompt in one go
-        print(f"\nExtracting embeddings (inference on TextEncoder)\n{'-' * 50}")
-        if isinstance(self.text_encoder, OnDeviceModel):
-            # Batch data into one inference job
-            embeddings = self.text_encoder(
-                [
-                    text_input.input_ids.int(),
-                    uncond_input.input_ids.int(),
-                ]
+        with torch.no_grad():
+            # Tokenize input prompt
+            text_input = self.tokenizer(
+                prompt,
+                padding="max_length",
+                max_length=self.tokenizer.model_max_length,
+                return_tensors="pt",
             )
-            cond_embeddings, uncond_embeddings = torch.split(embeddings, 1, 0)
-        else:
-            cond_embeddings = self.text_encoder(text_input.input_ids.type(torch.int32))
-            uncond_embeddings = self.text_encoder(
-                uncond_input.input_ids.type(torch.int32)
+
+            # Tokenize empty prompt
+            max_length = text_input.input_ids.shape[-1]
+            uncond_input = self.tokenizer(
+                [""],
+                padding="max_length",
+                max_length=max_length,
+                return_tensors="pt",
             )
-        return cond_embeddings, uncond_embeddings
+
+            # Embed using the text encoder neural network
+            # Encode input and empty prompt in one go
+            print(f"\nExtracting embeddings (inference on TextEncoder)\n{'-' * 50}")
+            if isinstance(self.text_encoder, OnDeviceModel):
+                # Batch data into one inference job
+                embeddings = self.text_encoder(
+                    [
+                        text_input.input_ids.int(),
+                        uncond_input.input_ids.int(),
+                    ]
+                )
+                assert isinstance(embeddings, torch.Tensor)
+                cond_embeddings, uncond_embeddings = torch.split(embeddings, 1, 0)
+            else:
+                cond_embeddings = self.text_encoder(
+                    text_input.input_ids.type(torch.int32)
+                )
+                uncond_embeddings = self.text_encoder(
+                    uncond_input.input_ids.type(torch.int32)
+                )
+            return cond_embeddings, uncond_embeddings
 
     def predict(self, *args, **kwargs):
         # See generate_image.
@@ -141,6 +150,7 @@ class StableDiffusionApp:
         num_steps: int = 50,
         seed: int = 0,
         guidance_scale: float = 7.5,
+        cond_image: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Generate an image using the PyTorch reference neural networks. This
@@ -187,143 +197,197 @@ class StableDiffusionApp:
         latents = run_diffusion_steps_on_latents(
             unet=self.unet,
             scheduler=self.scheduler,
-            time_embedding=self.time_embedding,
             cond_embeddings=cond_embeddings,
             uncond_embeddings=uncond_embeddings,
             num_steps=num_steps,
             seed=seed,
             guidance_scale=guidance_scale,
             channel_last_latent=self.channel_last_latent,
+            host_device=self.host_device,
+            controlnet=self.controlnet,
+            cond_image=cond_image,
         )
         # Decode generated image from latent space
         if self.channel_last_latent:
-            latents = _make_channel_last_torch(latents)
+            latents = _make_channel_last_torch(latents).to(self.host_device)
         image = self.vae_decoder(latents)
-        return image
-
-
-def get_time_embedding(
-    time_embedding: diffusers.embeddings.TimeEmbedding, timestep: int
-) -> torch.Tensor:
-    """
-    Since these time embeddings aren't dependent on prompt, they can be
-    pre-computed (for a pre-defined set of timesteps) in deployment and
-    skip these computation. We include them in demo for better clarity.
-    """
-    timestep = torch.tensor([timestep])
-    # TODO: pull 320 from UNet block output dim
-    t_emb = get_timestep_embedding(timestep, 320, True, 0)
-    emb = time_embedding(t_emb)
-
-    return emb
+        return image.to("cpu")  # move to cpu in case it was run on gpu
 
 
 def run_diffusion_steps_on_latents(
     unet: ExecutableModelProtocol,
     scheduler: diffusers.DPMSolverMultistepScheduler,
-    time_embedding: diffusers.embeddings.TimeEmbedding,
     cond_embeddings: torch.Tensor,
-    uncond_embeddings: torch.Tensor,
+    uncond_embeddings: torch.Tensor | None = None,
     num_steps: int = 20,
     seed: int = 0,
     guidance_scale: float = 7.5,
     channel_last_latent: bool = False,
     return_all_steps: bool = False,
-) -> torch.Tensor | tuple[torch.Tensor, dict[str, list[torch.Tensor]]]:
+    host_device: torch.device = torch.device("cpu"),
+    controlnet: ExecutableModelProtocol | None = None,
+    cond_image: torch.Tensor | None = None,
+) -> torch.Tensor | tuple[torch.Tensor, dict[str, Any]]:
     """
-        Parameters
-        ----------
-        prompt:
-            The text prompt to generate an image from.
-        num_steps:
-            The number of steps to run the diffusion process for. Higher value
-            may lead to better image quality.
-        seed:
-            The seed to use for the random number generator.
-        guidance_scale:
-            Classifier-free guidance is a method that allows us to control how
-            strongly the image generation is guided by the prompt. This is done
-            by always processing two samples at once: an unconditional (using a
-            text embedding of an empty prompt) and a conditional (using a text
-            embedding of the provided prompt). Given the noise prediction of
-            both of these, we linearly interpolate between them based on the
-            guidance_scale. A guidance scale of 0 is the same as using an empty
-            prompt. A guidance scale of 1 turns off classifier-free guidance
-            and is computationally less expensive since it only processes one
-            sample at a time. Intuitively you may think the rest of guidance
-            scales are between 0 and 1, but it is common to use a scale greater
-            than 1 as a method of amplifying the prompt's influence on the
-            image, pushing it further away from the unconditional sample.
+    Runs the diffusion steps on latents to generate the final latent sample.
 
-        channel_last_latent:
-            True if unet outputs latent of shape like (1, 64, 64, 4). False
-            for (1, 4, 64, 64). channel_last_latent=False for Huggingface's
-            model.
+    When guidance_scale is nonzero, classifier-free guidance is applied by computing
+    both conditional and unconditional noise predictions. In that case, `uncond_embeddings`
+    must be provided. If guidance_scale is 0, no guidance is applied and only the conditional
+    branch is used. If return_all_steps is True, this function returns a tuple of the
+    final latent and a dictionary of intermediate inputs.
 
-        return_all_steps:
-            True to return all intermediate latents (shape depending on
-            channel_last_latent) and time_emb.
+    The returned intermediates has:
+    - intermediates["unet"]: dict with keys "latent", "cond_emb", and optionally "uncond_emb",
+      each a list of torch.Tensor matching each diffusion step's inputs to the UNet.
+    - intermediates["vae"]: the final latent input to the VAE decoder.
 
-        Returns
-        -------
-        torch.Tensor
-            Final latent to be converted to RGB image by VAE decoder.
+    Parameters
+    ----------
+    unet:
+        The denoising network.
+    scheduler:
+        The scheduler controlling the diffusion process.
+    cond_embeddings:
+        Conditional text embeddings.
+    uncond_embeddings:
+        Unconditional text embeddings. This is required if guidance_scale != 0.
+    num_steps:
+        Number of diffusion steps.
+    seed:
+        Seed for random number generation.
+    guidance_scale:
+        Scale for classifier-free guidance. If nonzero, both conditional and unconditional
+        noise predictions are computed.
+    channel_last_latent:
+        True if the unet outputs latents in channel-last format.
+    return_all_steps:
+        If True, returns intermediate inputs for calibration along with final latent.
+    host_device:
+        Device on which to perform computation.
+    cond_image:
+        canny image in NCHW torch.Tensor.
 
-        dict[str, list[torch.Tensor]]
-            Intermediate inputs. keys are: ["latent", "time_emb"]. Each list is
-            of length `num_steps`. This is useful for calibration.
-
-
-    Use cases
-    - generate calibration data for unet (using hf model). Need time_emb etc
-    - Partial diffusion step (e.g., run last step only)?
-    - Full evaluation (quantsim, tetra inference job etc)
+    Returns
+    -------
+    torch.Tensor
+        Final latent sample.
+    tuple[torch.Tensor, dict[str, Any]]
+        Tuple of final latent and intermediates dict (only if return_all_steps is True).
     """
+    use_controlnet = controlnet is not None
+    unet_extra_input_names = []
+    if use_controlnet:
+        unet_extra_input_names = UNET_EXTRA_INPUT_NAMES[:]
     with torch.no_grad():
-        scheduler.set_timesteps(num_steps)
-        scheduler.config.prediction_type = "epsilon"
-
-        # Channel last input
+        # Prepare scheduler and initial noise
+        scheduler.set_timesteps(num_steps)  # type: ignore[attr-defined]
         latents_shape = (1, 4, OUT_H // 8, OUT_W // 8)
-
         generator = torch.manual_seed(seed)
-        latents = torch.randn(latents_shape, generator=generator)
+        latents = torch.randn(latents_shape, generator=generator, device=host_device)
+        latents = latents * scheduler.init_noise_sigma  # type: ignore[attr-defined]
 
-        latents = latents * scheduler.init_noise_sigma
+        # Initialize storage for UNet calibration data
+        unet_inputs = defaultdict(list)
 
-        # Export for calibration purpose
-        unet_inputs = dict(latent=[], time_emb=[])
+        if use_controlnet:
+            controlnet_inputs = defaultdict(list)
 
-        for i, t in enumerate(scheduler.timesteps):
+        for i, t in enumerate(scheduler.timesteps):  # type: ignore[attr-defined]
             print(f"\nStep: {i + 1}\n{'-' * 10}")
-            time_emb = get_time_embedding(time_embedding, t)
-            latent_model_input = scheduler.scale_model_input(latents, t)
-            if channel_last_latent:
-                latent_model_input = _make_channel_last_torch(latent_model_input)
-            unet_inputs["latent"].append(latent_model_input)
-            unet_inputs["time_emb"].append(time_emb)
 
-            # Denoise image in latent space
-            if isinstance(unet, OnDeviceModel):
-                # Batch data into one inference job
-                noise = unet(
-                    [latent_model_input, latent_model_input],
-                    [time_emb, time_emb],
-                    [cond_embeddings, uncond_embeddings],
+            time_input = torch.as_tensor([[t]], dtype=torch.float32).to(host_device)
+
+            latent_input = scheduler.scale_model_input(  # type: ignore[attr-defined]
+                latents, t
+            )
+            if channel_last_latent:
+                latent_input = _make_channel_last_torch(latent_input).to(host_device)
+
+            controlnet_out: tuple[torch.Tensor, ...] = tuple()
+            if use_controlnet:
+                controlnet_inputs["latent"].append(latent_input)
+                controlnet_inputs["timestep"].append(time_input)
+                controlnet_inputs["text_emb"].append(cond_embeddings)
+                controlnet_inputs["image_cond"].append(cond_image)
+                assert controlnet is not None
+                controlnet_out = controlnet(
+                    latent_input, time_input, cond_embeddings, cond_image
                 )
+                if channel_last_latent:
+                    controlnet_out = tuple(
+                        _make_channel_first_torch(v) for v in controlnet_out
+                    )
 
-                noise_cond, noise_uncond = torch.split(noise, 1, 0)
+            # Store inputs for calibration
+            unet_inputs["latent"].append(latent_input)
+            unet_inputs["timestep"].append(time_input)
+            unet_inputs["cond_emb"].append(cond_embeddings)
+            if use_controlnet:
+                for i, name in enumerate(unet_extra_input_names):
+                    unet_inputs[name].append(controlnet_out[i])
+
+            if guidance_scale != 0:
+                if uncond_embeddings is None:
+                    raise ValueError(
+                        "uncond_embeddings must be provided when guidance_scale"
+                        " is nonzero"
+                    )
+
+                unet_inputs["uncond_emb"].append(uncond_embeddings)
+
+                if isinstance(unet, OnDeviceModel):
+                    # Batch data into one inference job
+                    unet_extra_inputs = tuple([t, t] for t in controlnet_out)
+                    noise = unet(
+                        [latent_input, latent_input],
+                        [time_input, time_input],
+                        [cond_embeddings, uncond_embeddings],
+                        *unet_extra_inputs,
+                    )
+                    noise_cond, noise_uncond = torch.split(noise, 1, 0)
+                else:
+                    noise_cond = unet(
+                        latent_input, time_input, cond_embeddings, *controlnet_out
+                    )
+                    noise_uncond = unet(
+                        latent_input, time_input, uncond_embeddings, *controlnet_out
+                    )
+                noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
             else:
-                noise_cond = unet(latent_model_input, time_emb, cond_embeddings)
-                noise_uncond = unet(latent_model_input, time_emb, uncond_embeddings)
-            noise_pred = noise_uncond + guidance_scale * (noise_cond - noise_uncond)
+                if isinstance(unet, OnDeviceModel):
+                    # Batch data into one inference job
+                    unet_extra_inputs = tuple([t] for t in controlnet_out)
+                    noise_pred = unet(
+                        [latent_input],
+                        [time_input],
+                        [cond_embeddings],
+                        *unet_extra_inputs,
+                    )
+                else:
+                    noise_pred = unet(
+                        latent_input, time_input, cond_embeddings, *controlnet_out
+                    )
 
             if channel_last_latent:
-                noise_pred = _make_channel_first_torch(noise_pred)
-            latents = scheduler.step(noise_pred, t, latents).prev_sample
+                noise_pred = _make_channel_first_torch(noise_pred).to(host_device)
+            latents = scheduler.step(  # type: ignore[attr-defined]
+                noise_pred, t, latents
+            ).prev_sample
 
         if return_all_steps:
-            return latents, unet_inputs
+            vae_inputs = {"latent": [latents]}
+            intermediates = {"unet": unet_inputs, "vae": vae_inputs}
+            if use_controlnet:
+                intermediates["controlnet"] = controlnet_inputs
+            # Detach grad and move to cpu
+            for model, inputs in intermediates.items():
+                for input_name, input_list in intermediates[model].items():
+                    intermediates[model][input_name] = [
+                        v.detach().cpu() for v in input_list
+                    ]
+            return latents, intermediates
+
         return latents
 
 

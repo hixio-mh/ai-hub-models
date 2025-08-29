@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -11,8 +12,10 @@ import numpy as np
 import torch
 from PIL import Image
 
-from qai_hub_models.datasets.common import BaseDataset, DatasetSplit
+from qai_hub_models.datasets.common import BaseDataset, DatasetMetadata, DatasetSplit
+from qai_hub_models.models._shared.super_resolution.model import SuperResolutionModel
 from qai_hub_models.utils.asset_loaders import CachedWebDatasetAsset
+from qai_hub_models.utils.input_spec import InputSpec
 
 BSD300_URL = (
     "https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/BSDS300-images.tgz"
@@ -33,20 +36,20 @@ class BSD300Dataset(BaseDataset):
 
     def __init__(
         self,
-        input_height: int = 128,
-        input_width: int = 128,
-        scaling_factor: int = 4,
         split: DatasetSplit = DatasetSplit.TRAIN,
+        input_spec: InputSpec | None = None,
+        scaling_factor: int = 4,
     ):
         self.bsd_path = BSD300_ASSET.path(extracted=True)
 
         # bsd300 doesn't have a val split, so use the test split for this purpose
         split = DatasetSplit.TEST if split == DatasetSplit.VAL else split
 
-        BaseDataset.__init__(self, self.bsd_path, split)
+        BaseDataset.__init__(self, self.bsd_path, split, input_spec)
         self.scaling_factor = scaling_factor
-        self.input_height = input_height
-        self.input_width = input_width
+        input_spec = input_spec or SuperResolutionModel.get_input_spec()
+        self.input_height = input_spec["image"][0][2]
+        self.input_width = input_spec["image"][0][3]
         self.image_files = sorted(os.listdir(self.images_path))
 
     def _validate_data(self) -> bool:
@@ -89,11 +92,6 @@ class BSD300Dataset(BaseDataset):
         )
         img_arr = np.asarray(img)
         height, width = img_arr.shape[0:2]
-
-        # If portrait, transpose to landscape so that all tensors are equal size
-        if height > width:
-            img_arr = np.transpose(img_arr, (1, 0, 2))
-            height, width = img_arr.shape[0:2]
 
         # Take the largest possible center-crop of it such that its dimensions are perfectly divisible by the scaling factor
         x_remainder = width % (
@@ -138,3 +136,17 @@ class BSD300Dataset(BaseDataset):
     def _download_data(self) -> None:
         BSD300_ASSET.fetch(extract=True)
         self._prepare_data()
+
+    @staticmethod
+    def default_samples_per_job() -> int:
+        """
+        The default value for how many samples to run in each inference job.
+        """
+        return 100
+
+    @staticmethod
+    def get_dataset_metadata() -> DatasetMetadata:
+        return DatasetMetadata(
+            link="https://www2.eecs.berkeley.edu/Research/Projects/CS/vision/bsds/",
+            split_description="test split",
+        )

@@ -1,11 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
 
+from qai_hub_models.evaluators.base_evaluators import BaseEvaluator
+from qai_hub_models.evaluators.wholebody_pose_evaluator import WholeBodyPoseEvaluator
 from qai_hub_models.models.common import SampleInputsType
 from qai_hub_models.utils.asset_loaders import CachedWebModelAsset, load_numpy
 from qai_hub_models.utils.base_model import BaseModel
@@ -49,11 +52,13 @@ class RTMPosebody2d(BaseModel):
 
     def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         """
-            Forward pass for processing the inout image ad obtaining the model outputs.
-            Args :
-            -image (torch.Tensor) : Input tensor of shape (N, C, H, W)
-        .
-            Returns:
+        Forward pass for processing the inout image ad obtaining the model outputs.
+        Parameters:
+            image: Pixel values pre-processed for encoder consumption.
+                    Range: float[0, 1]
+                    3-channel Color Space: RGB
+
+        Returns:
             -tuple[torch.Tensor, torch.Tensor]: A tuple containg:
                 -output 1: SimCC x- axis predictions with shaoe (N, 17, 384), where :
                     N = batch size ,
@@ -64,7 +69,6 @@ class RTMPosebody2d(BaseModel):
                     133 = Number of keypoints,
                     512 = SimCC Y-axis resolution.
         """
-
         x = image[:, [2, 1, 0], ...]  # RGB -> BGR
         x = (x - self.pre_processor.mean) / self.pre_processor.std
         return self.model._forward(x)
@@ -89,3 +93,15 @@ class RTMPosebody2d(BaseModel):
     @staticmethod
     def get_output_names() -> list[str]:
         return ["pred_x", "pred_y"]
+
+    def get_evaluator(self) -> BaseEvaluator | None:
+        h, w = self.get_input_spec()["image"][0][2:]
+        return WholeBodyPoseEvaluator(h, w)
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["cocowholebody"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "cocowholebody"

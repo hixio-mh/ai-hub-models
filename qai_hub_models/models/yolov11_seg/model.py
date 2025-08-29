@@ -1,14 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
 
-from qai_hub_models.models._shared.yolo.model import Yolo, yolo_segment_postprocess
+from qai_hub_models.models._shared.yolo.model import YoloSeg, yolo_segment_postprocess
 from qai_hub_models.utils.asset_loaders import SourceAsRoot, wipe_sys_modules
-from qai_hub_models.utils.base_model import TargetRuntime
 
 MODEL_ASSET_VERSION = 1
 MODEL_ID = __name__.split(".")[-2]
@@ -27,7 +27,7 @@ DEFAULT_WEIGHTS = "yolo11n-seg.pt"
 NUM_ClASSES = 80
 
 
-class YoloV11Segmentor(Yolo):
+class YoloV11Segmentor(YoloSeg):
     """Exportable YoloV11 segmentor, end-to-end."""
 
     @classmethod
@@ -80,25 +80,4 @@ class YoloV11Segmentor(Yolo):
         boxes, scores, masks, classes = yolo_segment_postprocess(
             predictions[0], NUM_ClASSES
         )
-        return boxes, scores, masks, classes, predictions[1][-1]
-
-    @staticmethod
-    def get_output_names() -> list[str]:
-        return ["boxes", "scores", "masks", "class_idx", "protos"]
-
-    def get_hub_profile_options(
-        self, target_runtime: TargetRuntime, other_profile_options: str = ""
-    ) -> str:
-        """
-        Accuracy on ONNX runtime is not regained in NPU
-        Issue: https://github.com/qcom-ai-hub/tetracode/issues/13108
-        """
-        profile_options = super().get_hub_profile_options(
-            target_runtime, other_profile_options
-        )
-        if (
-            target_runtime == TargetRuntime.ONNX
-            and "--compute_unit" not in profile_options
-        ):
-            profile_options = profile_options + " --compute_unit cpu"
-        return profile_options
+        return boxes, scores, masks, classes.to(torch.uint8), predictions[1][-1]

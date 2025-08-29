@@ -1,8 +1,13 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
+
+from typing import Callable, cast
+
+import torch
 
 from qai_hub_models.models._shared.mediapipe.app import MediaPipeApp
 from qai_hub_models.models.mediapipe_face.model import (
@@ -13,8 +18,9 @@ from qai_hub_models.models.mediapipe_face.model import (
     LEFT_EYE_KEYPOINT_INDEX,
     RIGHT_EYE_KEYPOINT_INDEX,
     ROTATION_VECTOR_OFFSET_RADS,
-    MediaPipeFace,
 )
+from qai_hub_models.utils.base_model import CollectionModel
+from qai_hub_models.utils.input_spec import InputSpec
 
 
 class MediaPipeFaceApp(MediaPipeApp):
@@ -30,7 +36,13 @@ class MediaPipeFaceApp(MediaPipeApp):
 
     def __init__(
         self,
-        model: MediaPipeFace,
+        face_detector: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor]],
+        face_landmark_detector: Callable[
+            [torch.Tensor], tuple[torch.Tensor, torch.Tensor]
+        ],
+        anchors: torch.Tensor,
+        face_detector_input_spec: InputSpec,
+        landmark_detector_input_spec: InputSpec,
         min_detector_face_box_score: float = 0.75,
         nms_iou_threshold: float = 0.3,
         min_landmark_score: float = 0.5,
@@ -45,11 +57,11 @@ class MediaPipeFaceApp(MediaPipeApp):
             See parent initializer for further parameter documentation.
         """
         super().__init__(
-            model.face_detector,
-            model.face_detector.anchors,
-            model.face_landmark_detector,
-            model.face_detector.get_input_spec()["image"][0][-2:],
-            model.face_landmark_detector.get_input_spec()["image"][0][-2:],
+            face_detector,
+            anchors,
+            face_landmark_detector,
+            cast(tuple[int, int], face_detector_input_spec["image"][0][-2:]),
+            cast(tuple[int, int], landmark_detector_input_spec["image"][0][-2:]),
             RIGHT_EYE_KEYPOINT_INDEX,
             LEFT_EYE_KEYPOINT_INDEX,
             ROTATION_VECTOR_OFFSET_RADS,
@@ -60,4 +72,17 @@ class MediaPipeFaceApp(MediaPipeApp):
             nms_iou_threshold,
             min_landmark_score,
             FACE_LANDMARK_CONNECTIONS,
+        )
+
+    @classmethod
+    def from_pretrained(cls, model: CollectionModel) -> MediaPipeFaceApp:
+        from qai_hub_models.models.mediapipe_face.model import MediaPipeFace
+
+        assert isinstance(model, MediaPipeFace)
+        return cls(
+            model.face_detector,
+            model.face_landmark_detector,
+            model.face_detector.anchors,
+            model.face_detector.get_input_spec(),
+            model.face_landmark_detector.get_input_spec(),
         )

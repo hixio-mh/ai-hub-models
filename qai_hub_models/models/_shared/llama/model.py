@@ -1,14 +1,15 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
 import pickle
 from abc import abstractmethod
 from pathlib import Path
-from typing import Optional
+from typing import Optional, cast
 
 import torch
 from qai_hub.client import Device
@@ -24,20 +25,17 @@ from qai_hub_models.utils.asset_loaders import (
     CachedWebModelAsset,
     VersionType,
 )
-from qai_hub_models.utils.base_model import (
-    BaseModel,
-    PretrainedCollectionModel,
-    TargetRuntime,
-)
+from qai_hub_models.utils.base_model import BaseModel, FromPretrainedProtocol, Precision
 from qai_hub_models.utils.input_spec import InputSpec
 
 DEFAULT_INPUT_SEQ_LEN = 1024
 
 
-class Llama2PretrainedCollectionModel(PretrainedCollectionModel):
+# Llama2BundledModel has component and sub components and thus doesn't fit the
+# design of CollectionModel
+class Llama2BundledModel(FromPretrainedProtocol):
     @abstractmethod
-    def load_model_part(self, split_part: str) -> BaseModel:
-        ...
+    def load_model_part(self, split_part: str) -> BaseModel: ...
 
 
 def get_hidden_layer_range_from_split(split_part: int, model_split_map: dict):
@@ -109,7 +107,7 @@ def load_input_cached_data(
     model_asset_version: VersionType,
     model_type: str = "pp",
     input_seq_len: int = DEFAULT_INPUT_SEQ_LEN,
-):
+) -> dict[str, torch.Tensor] | None:
     data_path = (
         f"{data_dir}/{input_seq_len}/{model_name}_{split_part}_{model_type}_inputs.pkl"
     )
@@ -280,7 +278,7 @@ class RopeEmbedding:
         return cos, sin
 
 
-class Llama_QuantizedMixin(AimetEncodingLoaderMixin, BaseModel):
+class LlamaMixin(AimetEncodingLoaderMixin, BaseModel):
     def __init__(self, model: torch.nn.Module, encoding_path, is_token_generator=False):
         AimetEncodingLoaderMixin.__init__(self, model, encoding_path)
         BaseModel.__init__(self)
@@ -295,38 +293,45 @@ class Llama_QuantizedMixin(AimetEncodingLoaderMixin, BaseModel):
     def get_hub_compile_options(
         self,
         target_runtime: TargetRuntime,
+        precision: Precision = Precision.w8a16,
         other_compile_options: str = "",
         device: Optional[Device] = None,
     ) -> str:
-        graph_name = self.get_qnn_graph_name()
-        if (
-            target_runtime != TargetRuntime.QNN
-            and target_runtime != TargetRuntime.PRECOMPILED_QNN_ONNX
+
+        if not (
+            target_runtime.is_aot_compiled
+            and target_runtime.compilation_uses_qnn_converters
         ):
             raise RuntimeError(
                 f"Unsupported target_runtime provided: {target_runtime}."
-                " Only Precompile ONN ONNX or QNN runtime is supported for Llama for now."
+                " Only Precompile QNN ONNX or QNN runtime is supported for LLMs for now."
             )
-        options = (
-            " --target_runtime qnn_context_binary"
-            if target_runtime == TargetRuntime.QNN
-            else " --target_runtime precompiled_qnn_onnx"
+        if precision != Precision.w8a16:
+            raise RuntimeError("Only w8a16 precision is supported")
+
+        compile_options = super().get_hub_compile_options(
+            target_runtime, precision, other_compile_options, device
         )
-        options += " --quantize_full_type w8a16 --quantize_io"
+        compile_options += " --quantize_full_type w8a16"
+        graph_name = self.get_qnn_graph_name()
+
         if graph_name is not None:
-            options += f" --qnn_graph_name {graph_name}"
-        return options
+            compile_options += f" --qnn_options context_enable_graphs={graph_name}"
+        return compile_options
 
     def get_hub_profile_options(
         self,
         target_runtime: TargetRuntime,
         other_profile_options: str = "",
     ) -> str:
-        options = "--max_profiler_iterations 50"
+        profile_options = super().get_hub_profile_options(
+            target_runtime, other_profile_options
+        )
+        profile_options += " --max_profiler_iterations 50"
         graph_name = self.get_qnn_graph_name()
         if graph_name is not None:
-            options += f" --qnn_options context_enable_graphs={graph_name}"
-        return options
+            profile_options += f" --qnn_options context_enable_graphs={graph_name}"
+        return profile_options
 
     @staticmethod
     def _get_output_names(
@@ -353,11 +358,18 @@ class Llama_QuantizedMixin(AimetEncodingLoaderMixin, BaseModel):
     def _sample_inputs_impl(
         self, input_spec: Optional[InputSpec] = None
     ) -> SampleInputsType:
-        data = self.get_calibration_data(input_spec=input_spec)
-        assert data is not None
+        # According to QuantizableModelProtocol, self.get_calibration_data is supposed to
+        # return a DatasetEntries, i.e., something like dict[str, list[torch.Tensor]].
+        # Unfortunately, it actually returns dict[str, torch.Tensor] and users might have
+        # inputs in this format pickled locally. Too bad. The cast is correct and this
+        # method appears to exist only to correct this earlier error.
+        data = cast(
+            dict[str, torch.Tensor], self.get_calibration_data(input_spec=input_spec)
+        )
+        patched_inputs: SampleInputsType = {}
         for key, val in data.items():
-            data[key] = [val.detach().numpy()]  # type: ignore
-        return dict(data)
+            patched_inputs[key] = [val.detach().numpy()]
+        return patched_inputs
 
     def preferred_hub_source_model_format(
         self, target_runtime: TargetRuntime

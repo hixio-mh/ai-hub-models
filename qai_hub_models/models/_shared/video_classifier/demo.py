@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from qai_hub_models.models._shared.video_classifier.app import KineticsClassifierApp
@@ -18,6 +19,7 @@ def kinetics_classifier_demo(
     model_type: type[KineticsClassifier],
     default_video: str | CachedWebAsset,
     is_test: bool = False,
+    app_cls: type[KineticsClassifierApp] = KineticsClassifierApp,
 ):
     # Demo parameters
     parser = get_model_cli_parser(model_type)
@@ -30,7 +32,7 @@ def kinetics_classifier_demo(
 
     # Load image & model
     model = model_from_cli_args(model_type, args)
-    app = KineticsClassifierApp(model)
+    app = app_cls(model)
     print("Model Loaded")
     with qaihm_temp_dir() as tmpdir:
         dst_path = load_path(args.video, tmpdir)

@@ -1,74 +1,38 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
-import numpy as np
+
 import pytest
-import torch
-from datasets import load_dataset
 
 from qai_hub_models.models.huggingface_wavlm_base_plus.app import (
     HuggingFaceWavLMBasePlusApp,
 )
 from qai_hub_models.models.huggingface_wavlm_base_plus.demo import demo_main
 from qai_hub_models.models.huggingface_wavlm_base_plus.model import (
-    MODEL_ASSET_VERSION,
-    MODEL_ID,
+    SAMPLE_INPUTS,
     HuggingFaceWavLMBasePlus,
 )
-from qai_hub_models.utils.asset_loaders import CachedWebModelAsset
+from qai_hub_models.utils.asset_loaders import load_numpy
 from qai_hub_models.utils.testing import skip_clone_repo_check
 
-OUTPUT_TENSOR_1 = CachedWebModelAsset.from_asset_store(
-    MODEL_ID, MODEL_ASSET_VERSION, "wavlm_output_tensor_1.pth"
-)
-OUTPUT_TENSOR_2 = CachedWebModelAsset.from_asset_store(
-    MODEL_ID, MODEL_ASSET_VERSION, "wavlm_output_tensor_2.pth"
-)
 
+def _test_impl(app: HuggingFaceWavLMBasePlusApp) -> None:
+    x = load_numpy(SAMPLE_INPUTS)["audio"]
 
-def _test_impl(app: HuggingFaceWavLMBasePlusApp):
-    # Load input data
-    dataset = load_dataset(
-        "hf-internal-testing/librispeech_asr_demo", "clean", split="validation"
-    )
-    dataset = dataset.sort("id")
-    x = dataset[0]["audio"]["array"]
-    sampling_rate = dataset.features["audio"].sampling_rate
-
-    # Load expected output data
-    first_output_tensor = torch.load(OUTPUT_TENSOR_1.fetch())
-    output_array1 = first_output_tensor.detach().numpy()
-    second_output_tensor = torch.load(OUTPUT_TENSOR_2.fetch())
-    output_array2 = second_output_tensor.detach().numpy()
-
-    # Run inference
-    app_output_features = app.predict_features(x, sampling_rate)
-
-    # Compare outputs
-    np.testing.assert_allclose(
-        np.asarray(app_output_features[0].detach().numpy(), dtype=np.float32),
-        np.asarray(output_array1, dtype=np.float32),
-        rtol=0.02,
-        atol=0.2,
-    )
-
-    np.testing.assert_allclose(
-        np.asarray(app_output_features[1].detach().numpy(), dtype=np.float32),
-        np.asarray(output_array2, dtype=np.float32),
-        rtol=0.02,
-        atol=0.2,
-    )
+    app_output = app.predict_features(x)
+    expected_text = "and so my fellow americas ask not what your country can do for you ask what you can do for your"
+    assert app_output == expected_text
 
 
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
     _test_impl(HuggingFaceWavLMBasePlusApp(HuggingFaceWavLMBasePlus.from_pretrained()))
 
 
 @pytest.mark.trace
 @skip_clone_repo_check
-def test_trace():
+def test_trace() -> None:
     _test_impl(
         HuggingFaceWavLMBasePlusApp(
             HuggingFaceWavLMBasePlus.from_pretrained().convert_to_torchscript()
@@ -77,5 +41,5 @@ def test_trace():
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

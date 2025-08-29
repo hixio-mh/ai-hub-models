@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import datetime
 import os
 
@@ -32,18 +33,18 @@ def test_compile_jobs_success():
         job = hub.get_job(job_id)
         status = job.get_status()
         if not status.finished:
-            # Wait a maximum of 15 minutes for a compile job
-            timemax = datetime.timedelta(minutes=15)
+            # Wait a maximum of 55 minutes for a compile job
+            timemax = datetime.timedelta(minutes=55)
             timediff = datetime.datetime.now() - job.date
             if timediff < timemax:
                 try:
-                    job = job.wait((timemax - timediff).total_seconds())
+                    job.wait(int((timemax - timediff).total_seconds()))
                 except TimeoutError:
-                    timeout_jobs[name] = job_id
+                    timeout_jobs[name] = job.url
             else:
-                timeout_jobs[name] = job_id
+                timeout_jobs[name] = job.url
         elif not job.get_status().success:
-            failed_jobs[name] = job_id
+            failed_jobs[name] = job.url
 
     error_strs = []
     if failed_jobs:

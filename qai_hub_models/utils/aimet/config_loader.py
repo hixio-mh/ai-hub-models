@@ -1,24 +1,9 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from pathlib import Path
-
-
-def get_default_aimet_config_legacy_v1() -> str:
-    path = Path(__file__).parent / "default_config_legacy_v1.json"
-    return str(path.resolve())
-
-
-def get_default_aimet_config_legacy_v2() -> str:
-    # Introduced per-channel weights
-    path = Path(__file__).parent / "default_config_legacy_v2.json"
-    return str(path.resolve())
-
-
-def get_default_aimet_config_legacy_v3() -> str:
-    path = Path(__file__).parent / "default_config_legacy_v3.json"
-    return str(path.resolve())
 
 
 def get_default_aimet_config() -> str:
@@ -28,6 +13,16 @@ def get_default_aimet_config() -> str:
 
 def get_default_per_tensor_aimet_config() -> str:
     path = Path(__file__).parent / "default_per_tensor_config.json"
+    return str(path.resolve())
+
+
+def get_default_per_tensor_v73_aimet_config() -> str:
+    path = Path(__file__).parent / "default_per_tensor_config_v73.json"
+    return str(path.resolve())
+
+
+def get_default_per_tensor_v69_aimet_config() -> str:
+    path = Path(__file__).parent / "default_per_tensor_config_v69.json"
     return str(path.resolve())
 
 

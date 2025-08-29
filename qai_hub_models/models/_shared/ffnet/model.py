@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -132,3 +133,11 @@ class FFNetLowRes(FFNet):
         width: int = 1024,
     ) -> InputSpec:
         return FFNet.get_input_spec(batch_size, height, width)
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["cityscapes_lowres"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "cityscapes_lowres"

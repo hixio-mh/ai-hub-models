@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -11,7 +12,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from qai_hub_models.datasets.common import BaseDataset, DatasetSplit
+from qai_hub_models.datasets.common import BaseDataset, DatasetMetadata, DatasetSplit
 from qai_hub_models.utils.asset_loaders import ASSET_CONFIG, extract_zip_file
 from qai_hub_models.utils.image_processing import app_to_net_image_inputs
 
@@ -44,6 +45,9 @@ CLASS_MAP = {
     33: 18,
 }
 
+HEIGHT = 1024
+WIDTH = 2048
+
 
 def class_map_lookup(key: int):
     return CLASS_MAP.get(key, -1)
@@ -59,6 +63,7 @@ class CityscapesDataset(BaseDataset):
         split: DatasetSplit = DatasetSplit.TRAIN,
         input_images_zip: str | None = None,
         input_gt_zip: str | None = None,
+        make_lowres: bool = False,
     ):
         self.data_path = ASSET_CONFIG.get_local_store_dataset_path(
             CITYSCAPES_DATASET_ID, CITYSCAPES_VERSION, "data"
@@ -68,6 +73,7 @@ class CityscapesDataset(BaseDataset):
 
         self.input_images_zip = input_images_zip
         self.input_gt_zip = input_gt_zip
+        self.make_lowres = make_lowres
         BaseDataset.__init__(self, self.data_path, split=split)
 
     def __getitem__(self, index):
@@ -75,6 +81,10 @@ class CityscapesDataset(BaseDataset):
         gt_path = self.gt_list[index]
         image = Image.open(image_path)
         gt_img = Image.open(gt_path)
+        if self.make_lowres:
+            new_size = (WIDTH // 2, HEIGHT // 2)
+            image = image.resize(new_size)
+            gt_img = gt_img.resize(new_size)
         gt = np.vectorize(class_map_lookup)(np.array(gt_img))
         image_tensor = app_to_net_image_inputs(image)[1].squeeze(0)
         return image_tensor, torch.tensor(gt)
@@ -91,12 +101,13 @@ class CityscapesDataset(BaseDataset):
         self.image_list: list[Path] = []
         self.gt_list: list[Path] = []
         img_count = 0
-        for subdir in self.images_path.iterdir():
-            for img_path in subdir.iterdir():
+        # Sort by path name to ensure deterministic ordering
+        for subdir in sorted(self.images_path.iterdir(), key=lambda item: item.name):
+            for img_path in sorted(subdir.iterdir(), key=lambda item: item.name):
                 if not img_path.name.endswith("leftImg8bit.png"):
                     print(f"Invalid file: {str(img_path)}")
                     return False
-                if Image.open(img_path).size != (2048, 1024):
+                if Image.open(img_path).size != (WIDTH, HEIGHT):
                     raise ValueError(Image.open(img_path).size)
                 img_count += 1
                 gt_filename = img_path.name.replace(
@@ -116,9 +127,10 @@ class CityscapesDataset(BaseDataset):
             "so users need to manually download it by following these steps: \n"
             "1. Go to https://www.cityscapes-dataset.com/ and make an account\n"
             "2. Go to https://www.cityscapes-dataset.com/downloads/ and download "
-            "`leftImg8bit_trainvaltest.zip` and `gt_trainvaltest.zip`\n"
-            "3. Pass the filepaths to these two files to the init function of this class. "
-            "This should only be needed the first time you run this on the machine."
+            "`leftImg8bit_trainvaltest.zip` and `gtFine_trainvaltest.zip`\n"
+            "3. Run `python -m qai_hub_models.datasets.configure_dataset "
+            "--dataset cityscapes --files /path/to/leftImg8bit_trainvaltest.zip "
+            "/path/to/gtFine_trainvaltest.zip`"
         )
         if self.input_images_zip is None or not self.input_images_zip.endswith(
             IMAGES_DIR_NAME + ".zip"
@@ -132,3 +144,17 @@ class CityscapesDataset(BaseDataset):
         os.makedirs(self.images_path.parent, exist_ok=True)
         extract_zip_file(self.input_images_zip, self.images_path)
         extract_zip_file(self.input_gt_zip, self.gt_path)
+
+    @staticmethod
+    def default_samples_per_job() -> int:
+        """
+        The default value for how many samples to run in each inference job.
+        """
+        return 50
+
+    @staticmethod
+    def get_dataset_metadata() -> DatasetMetadata:
+        return DatasetMetadata(
+            link="https://www.cityscapes-dataset.com/",
+            split_description="validation split",
+        )

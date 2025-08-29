@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 
 from qai_hub_models.models.posenet_mobilenet.app import PosenetApp
@@ -28,7 +29,7 @@ KEYPOINT_COORDS_GT = CachedWebModelAsset.from_asset_store(
 
 
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
     image = load_image(IMAGE_ADDRESS)
     model = PosenetMobilenet.from_pretrained()
     h, w = PosenetMobilenet.get_input_spec()["image"][0][2:]
@@ -49,5 +50,5 @@ def test_task():
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

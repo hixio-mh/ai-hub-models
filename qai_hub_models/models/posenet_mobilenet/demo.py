@@ -1,8 +1,11 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
+
+from PIL.Image import Image
 
 from qai_hub_models.models.posenet_mobilenet.app import PosenetApp
 from qai_hub_models.models.posenet_mobilenet.model import (
@@ -44,8 +47,11 @@ def posenet_demo(model_cls: type[PosenetMobilenet], is_test: bool = False):
     print("Model Loaded")
 
     h, w = model_cls.get_input_spec()["image"][0][2:]
-    app = PosenetApp(model, h, w)
+
+    # OnDeviceModel is underspecified to have a fully-baked type here
+    app = PosenetApp(model, h, w)  # type: ignore[reportArgumentType]
     keypoints = app.predict_pose_keypoints(image)
+    assert isinstance(keypoints, Image)
     if not is_test:
         display_or_save_image(
             keypoints, args.output_dir, "posenet_demo_output.png", "keypoints"

@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
@@ -37,13 +38,11 @@ class YoloV10Detector(Yolo):
         model: nn.Module,
         include_postprocessing: bool = False,
         split_output: bool = False,
-        use_quantized_postprocessing: bool = False,
     ) -> None:
         super().__init__()
         self.model = model
         self.include_postprocessing = include_postprocessing
         self.split_output = split_output
-        self.use_quantized_postprocessing = use_quantized_postprocessing
 
     @classmethod
     def from_pretrained(
@@ -51,7 +50,6 @@ class YoloV10Detector(Yolo):
         ckpt_name: str = DEFAULT_WEIGHTS,
         include_postprocessing: bool = True,
         split_output: bool = False,
-        use_quantized_postprocessing: bool = False,
     ):
         with SourceAsRoot(
             SOURCE_REPO,
@@ -85,7 +83,6 @@ class YoloV10Detector(Yolo):
                 model,
                 include_postprocessing,
                 split_output,
-                use_quantized_postprocessing,
             )
 
     def forward(self, image):
@@ -123,9 +120,7 @@ class YoloV10Detector(Yolo):
                 return boxes, scores
             return torch.cat([boxes, scores], dim=1)
 
-        boxes, scores, classes = yolo_detect_postprocess(
-            boxes, scores, self.use_quantized_postprocessing
-        )
+        boxes, scores, classes = yolo_detect_postprocess(boxes, scores)
 
         return boxes, scores, classes
 

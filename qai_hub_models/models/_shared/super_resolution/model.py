@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
@@ -26,7 +27,7 @@ def validate_scale_factor(scale_factor: int) -> None:
     """Only these scales have pre-trained checkpoints available."""
     valid_scales = [2, 3, 4]
     assert scale_factor in valid_scales, "`scale_factor` must be in : " + ", ".join(
-        valid_scales
+        [str(s) for s in valid_scales]
     )
 
 
@@ -93,3 +94,11 @@ class SuperResolutionModel(BaseModel):
             h, w = input_spec["image"][0][2:]
             image = image.resize((w, h))
         return {"image": [app_to_net_image_inputs(image)[1].numpy()]}
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["bsd300"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "bsd300"

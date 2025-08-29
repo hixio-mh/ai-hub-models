@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import fileinput
@@ -23,6 +24,7 @@ from functools import partial
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Optional, Union
+from unittest.mock import MagicMock
 from zipfile import ZipFile
 
 import gdown
@@ -86,7 +88,8 @@ def tmp_os_env(env_values: dict[str, str]):
         os.environ.update(env_values)
         yield
     finally:
-        os.environ = previous_env  # type: ignore
+        os.environ.clear()
+        os.environ.update(previous_env)
 
 
 def _query_yes_no(question, default="yes"):
@@ -102,7 +105,6 @@ def _query_yes_no(question, default="yes"):
 
     Sourced from https://stackoverflow.com/questions/3041986/apt-command-line-interface-like-yes-no-input
     """
-    global _always_answer
     if _always_answer is not None:
         return _always_answer
 
@@ -292,6 +294,9 @@ def SourceAsRoot(
     source_repo_patches: list[str] = [],
     keep_sys_modules: bool = True,
     ask_to_clone: bool = not EXECUTING_IN_CI_ENVIRONMENT,
+    # These modules are imported but unused during model loading.
+    # They are mocked so they can be imported without requiring us to install them.
+    imported_but_unused_modules: list[str] = [],
 ):
     """
     Context manager that runs code with:
@@ -316,6 +321,13 @@ def SourceAsRoot(
     original_modules = dict(sys.modules)
     cwd = os.getcwd()
     try:
+        # These modules are imported but unused during use.
+        # They are mocked so they can be imported without error
+        # without requiring us to install them.
+        for module_name in imported_but_unused_modules:
+            if module_name not in sys.modules:
+                sys.modules[module_name] = MagicMock()
+
         # If repo path already in sys.path from previous load,
         # delete it and put it first
         if repository_path in sys.path:
@@ -337,7 +349,9 @@ def SourceAsRoot(
             # We want all imports done within the sub-repo to be either deleted from
             # sys.modules or restored to the previous module if one was overwritten.
             for name, module in list(sys.modules.items()):
-                if (getattr(module, "__file__", "") or "").startswith(repository_path):
+                if (getattr(module, "__file__", "") or "").startswith(
+                    repository_path
+                ) or name in imported_but_unused_modules:
                     if name in original_modules:
                         sys.modules[name] = original_modules[name]
                     else:
@@ -800,7 +814,7 @@ class CachedWebModelAsset(CachedWebAsset):
         self.model_id = model_id
         self.model_version = model_asset_version
 
-    @staticmethod  # type: ignore
+    @staticmethod
     def from_asset_store(
         model_id: str,
         model_asset_version: str | int,
@@ -837,7 +851,7 @@ class CachedWebModelAsset(CachedWebAsset):
             num_retries,
         )
 
-    @staticmethod  # type: ignore
+    @staticmethod
     def from_google_drive(
         gdrive_file_id: str,
         model_id: str,
@@ -904,7 +918,7 @@ class CachedWebDatasetAsset(CachedWebAsset):
         self.dataset_id = dataset_id
         self.dataset_version = dataset_version
 
-    @staticmethod  # type: ignore
+    @staticmethod
     def from_asset_store(
         dataset_id: str,
         dataset_version: str | int,
@@ -927,7 +941,7 @@ class CachedWebDatasetAsset(CachedWebAsset):
         web_store_path = asset_config.get_dataset_asset_url(
             dataset_id, dataset_version, filename
         )
-        return CachedWebModelAsset(
+        return CachedWebDatasetAsset(
             web_store_path,
             dataset_id,
             dataset_version,
@@ -937,7 +951,7 @@ class CachedWebDatasetAsset(CachedWebAsset):
             num_retries,
         )
 
-    @staticmethod  # type: ignore
+    @staticmethod
     def from_google_drive(
         gdrive_file_id: str,
         model_id: str,
@@ -963,7 +977,7 @@ class CachedWebDatasetAsset(CachedWebAsset):
 
             asset_config: Asset config to use to save this file.
         """
-        return CachedWebModelAsset(
+        return CachedWebDatasetAsset(
             f"https://drive.google.com/uc?id={gdrive_file_id}",
             model_id,
             model_asset_version,
@@ -998,7 +1012,7 @@ def download_file(web_url: str, dst_path: str, num_retries: int = 4) -> str:
                     for data in response.iter_content(block_size):
                         progress_bar.update(len(data))
                         file.write(data)
-            os.rename(tmp_filepath, dst_path)
+            shutil.move(tmp_filepath, dst_path)
         print("Done")
     return dst_path
 
@@ -1043,7 +1057,9 @@ def copyfile(src: str, dst: str, num_retries: int = 4):
     return dst
 
 
-def extract_zip_file(filepath_str: str, out_path: Path | None = None) -> Path:
+def extract_zip_file(
+    filepath_str: os.PathLike | str, out_path: Path | None = None
+) -> Path:
     """
     Given a local filepath to a zip file, extract its contents. into a folder
     in the same directory. The directory with the contents will have the same
@@ -1105,28 +1121,34 @@ def callback_with_retry(
         try:
             return callback(*args, **kwargs)
         except Exception as error:
-            error_msg = (
-                f"Error: {error.message}"  # type: ignore
-                if hasattr(error, "message")
-                else f"Error: {str(error)}"
-            )
+            error_msg = f"Error: {getattr(error, 'message', str(error))}"
             print(error_msg)
             if hasattr(error, "status_code"):
-                print(f"Status code: {error.status_code}")  # type: ignore
+                print(f"Status code: {getattr(error, 'status_code')}")
             time.sleep(10)
             return callback_with_retry(num_retries - 1, callback, *args, **kwargs)
 
 
 @contextmanager
-def qaihm_temp_dir():
+def qaihm_temp_dir(debug_base_dir: str | None = None):
     """
     Keep temp file under LOCAL_STORE_DEFAULT_PATH instead of /tmp which has
     limited space.
+
+    Parameters:
+        debug_base_dir: If provided, use this directory instead of creating a temp directory.
+                       If None, creates a temporary directory as usual.
     """
-    path = os.path.join(LOCAL_STORE_DEFAULT_PATH, "tmp")
-    os.makedirs(path, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=path) as tempdir:
-        yield tempdir
+    if debug_base_dir is not None:
+        # Use the debug directory directly
+        os.makedirs(debug_base_dir, exist_ok=True)
+        yield debug_base_dir
+    else:
+        # Use temporary directory as before
+        path = os.path.join(LOCAL_STORE_DEFAULT_PATH, "tmp")
+        os.makedirs(path, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=path) as tempdir:
+            yield tempdir
 
 
 PathType = Union[str, Path, CachedWebAsset]

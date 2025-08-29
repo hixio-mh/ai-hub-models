@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
@@ -98,9 +99,9 @@ def _load_realesrgan_source_model_from_weights(
             except ImportError:
                 import torchvision.transforms.functional
 
-                sys.modules[
-                    "torchvision.transforms.functional_tensor"
-                ] = torchvision.transforms.functional
+                sys.modules["torchvision.transforms.functional_tensor"] = (
+                    torchvision.transforms.functional
+                )
             # ----
             import realesrgan.archs.srvgg_arch as srvgg_arch
         else:

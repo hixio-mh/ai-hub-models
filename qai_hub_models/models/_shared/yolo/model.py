@@ -1,13 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
+import torch.nn.functional as F
 
 from qai_hub_models.evaluators.base_evaluators import BaseEvaluator
-from qai_hub_models.evaluators.detection_evaluator import DetectionEvaluator
 from qai_hub_models.models._shared.yolo.utils import (
     box_transform_xywh2xyxy_split_input,
     get_most_likely_score,
@@ -19,11 +20,12 @@ from qai_hub_models.utils.base_model import BaseModel
 from qai_hub_models.utils.image_processing import app_to_net_image_inputs
 from qai_hub_models.utils.input_spec import InputSpec
 
+DEFAULT_YOLO_IMAGE_INPUT_HW = 640
+
 
 def yolo_detect_postprocess(
     boxes: torch.Tensor,
     scores: torch.Tensor,
-    use_quantized_postprocessing: bool = False,
 ):
     """
     Post processing to break newer ultralytics yolo models (e.g. Yolov8, Yolo11) detector output into multiple, consumable tensors (eg. for NMS).
@@ -36,10 +38,6 @@ def yolo_detect_postprocess(
             Shape is [batch, num_classes, num_preds]
             Each element represents the probability that a given box is
                 an instance of a given class.
-        use_quantized_postprocessing: bool
-            If post-processing a non-quantized model, need to split the bounding box
-                processing into multiple smaller tensors due to NPU limitations.
-            If quantized, the entire processing can be done on a single tensor.
 
     Returns:
         boxes: torch.Tensor
@@ -54,20 +52,17 @@ def yolo_detect_postprocess(
     scores = torch.permute(scores, [0, 2, 1])
 
     # Convert boxes to (x1, y1, x2, y2)
-    # Doing transform in fp16 requires special logic to keep on NPU
-    if use_quantized_postprocessing:
-        boxes = box_transform_xywh2xyxy_split_input(boxes[..., 0:2], boxes[..., 2:4])
-    else:
-        boxes = transform_box_layout_xywh2xyxy(boxes)
+    boxes = box_transform_xywh2xyxy_split_input(boxes[..., 0:2], boxes[..., 2:4])
+
+    # TODO(13933) Revert once QNN issues with ReduceMax are fixed
+    if scores.shape[-1] == 1:
+        scores = F.pad(scores, (0, 1))
 
     # Get class ID of most likely score.
     scores, class_idx = torch.max(scores, -1, keepdim=False)
 
-    # Quantized model runtime doesn't like int32 outputs, so cast class idx to uint8.
-    # This is a no-op for coco models, but for datasets with >255 classes, this
-    # should be float32 for the unquantized model.
-    class_dtype = torch.uint8 if use_quantized_postprocessing else torch.float32
-    return boxes, scores, class_idx.to(class_dtype)
+    # Cast classes to int8 for imsdk compatibility
+    return boxes, scores, class_idx.to(torch.uint8)
 
 
 def yolo_segment_postprocess(detector_output: torch.Tensor, num_classes: int):
@@ -116,13 +111,20 @@ class Yolo(BaseModel):
     STRIDE_MULTIPLE = 32
 
     def get_evaluator(self) -> BaseEvaluator:
-        return DetectionEvaluator(*self.get_input_spec()["image"][0][2:])
+        # This is imported here so segmentation models don't have to install
+        # detection evaluator dependencies.
+        from qai_hub_models.evaluators.detection_evaluator import DetectionEvaluator
+
+        image_height, image_width = self.get_input_spec()["image"][0][2:]
+        return DetectionEvaluator(
+            image_height, image_width, score_threshold=0.25, nms_iou_threshold=0.7
+        )
 
     @staticmethod
     def get_input_spec(
         batch_size: int = 1,
-        height: int = 640,
-        width: int = 640,
+        height: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
+        width: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
     ) -> InputSpec:
         """
         Returns the input specification (name -> (shape, type). This can be
@@ -145,3 +147,38 @@ class Yolo(BaseModel):
     @staticmethod
     def get_channel_last_inputs() -> list[str]:
         return ["image"]
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["coco"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "coco"
+
+
+class YoloSeg(Yolo):
+    @staticmethod
+    def get_output_names() -> list[str]:
+        return ["boxes", "scores", "masks", "class_idx", "protos"]
+
+    @staticmethod
+    def get_channel_last_outputs() -> list[str]:
+        return ["protos"]
+
+    def get_evaluator(self) -> BaseEvaluator:
+        # This is imported here so detection models don't have to install the requirements for the segmentation dataset.
+        from qai_hub_models.evaluators.yolo_segmentation_evaluator import (
+            YoloSegmentationOutputEvaluator,
+        )
+
+        image_height, image_width = self.get_input_spec()["image"][0][2:]
+        return YoloSegmentationOutputEvaluator(image_height, image_width, 0.001, 0.7)
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["coco_seg"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "coco_seg"

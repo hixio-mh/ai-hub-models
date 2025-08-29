@@ -1,15 +1,16 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
 import sys
 from collections.abc import Iterable
 from tempfile import TemporaryDirectory
-from typing import Optional
 
+from .changes import get_changed_files_in_package
 from .constants import (
     BUILD_ROOT,
     GLOBAL_REQUIREMENTS_PATH,
@@ -23,7 +24,9 @@ from .util import (
     check_code_gen_field,
     get_is_hub_quantized,
     get_model_python_version_requirements,
+    get_pip,
     model_needs_aimet,
+    on_ci,
 )
 from .venv import (
     CreateVenvTask,
@@ -39,12 +42,23 @@ class PyTestQAIHMTask(PyTestTask):
     Pytest utils.
     """
 
-    def __init__(self, venv: Optional[str]):
+    def __init__(self, venv: str):
         all_dirs_except_models = [
             f"{PY_PACKAGE_SRC_ROOT}/{x}"
             for x in os.listdir(PY_PACKAGE_SRC_ROOT)
-            if x != "models" and x != "__pycache__"
+            if x != "models" and x != "__pycache__" and x != "scorecard"
         ]
+
+        # Internal scorecard tests are expensive (calls to Hub), so only run them if the internal scorecard changes.
+        scorecard_files = [
+            os.path.join(PY_PACKAGE_SRC_ROOT, "scorecard", x)
+            for x in os.listdir(os.path.join(PY_PACKAGE_SRC_ROOT, "scorecard"))
+        ]
+
+        if not get_changed_files_in_package("qai_hub_models/scorecard/internal"):
+            scorecard_files.remove(f"{PY_PACKAGE_SRC_ROOT}/scorecard/internal")
+        all_dirs_except_models.extend(scorecard_files)
+
         all_dirs_except_models = [x for x in all_dirs_except_models if os.path.isdir(x)]
         super().__init__(
             "Test QAIHM",
@@ -63,23 +77,43 @@ class PyTestModelTask(CompositeTask):
         self,
         model_name: str,
         python_executable: str,
-        venv: str
-        | None = None,  # If None, creates a fresh venv for each model instead of using 1 venv for all models.
+        venv: (
+            str | None
+        ) = None,  # If None, creates a fresh venv for each model instead of using 1 venv for all models.
         use_shared_cache=False,  # If True, uses a shared cache rather than the global QAIHM cache.
         run_general: bool = True,
+        run_quantize: bool = False,
         run_compile: bool = True,
         run_profile: bool = False,
-        run_quantize: bool = False,
+        run_inference: bool = False,
         run_export: bool = False,
         run_trace: bool = True,
         install_deps: bool = True,
         raise_on_failure: bool = False,
+        qaihm_wheel_dir: str | os.PathLike | None = None,
     ):
         tasks = []
 
         model_version_reqs = get_model_python_version_requirements(model_name)
         current_py_version = sys.version_info
-        if model_version_reqs[0] and current_py_version < model_version_reqs[0]:
+
+        if check_code_gen_field(model_name, "skip_hub_tests_and_scorecard"):
+            tasks.append(  # greater than this python version
+                RunCommandsTask(
+                    f"Skip Model {model_name} Hub Tests",
+                    f'echo "Skipping Tests For Model {model_name} -- skip_hub_tests_and_scorecard is set in code gen"',
+                )
+            )
+        elif (
+            check_code_gen_field(model_name, "skip_scorecard") and not run_general
+        ):  # For scorecard runs, run_general is set to False because it is a test_compile_all_models task rather than a precheckin task with hub tests.
+            tasks.append(  # greater than this python version
+                RunCommandsTask(
+                    f"Skip Model {model_name} Scorecard",
+                    f'echo "Skipping Scorecard For Model {model_name} -- skip_scorecard is set in code gen"',
+                )
+            )
+        elif model_version_reqs[0] and current_py_version < model_version_reqs[0]:
             tasks.append(  # greater than this python version
                 RunCommandsTask(
                     f"Skip Model {model_name}",
@@ -108,7 +142,12 @@ class PyTestModelTask(CompositeTask):
                 tasks.append(CreateVenvTask(model_venv, python_executable))
                 # Creates a new environment from scratch
                 tasks.append(
-                    SyncModelVenvTask(model_name, model_venv, include_dev_deps=True)
+                    SyncModelVenvTask(
+                        model_name,
+                        model_venv,
+                        include_dev_deps=True,
+                        qaihm_wheel_dir=qaihm_wheel_dir,
+                    )
                 )
             else:
                 model_venv = venv
@@ -131,6 +170,7 @@ class PyTestModelTask(CompositeTask):
                 test_flags.append("compile")
             if run_profile:
                 test_flags.append("profile")
+            if run_inference:
                 test_flags.append("inference")
             if run_quantize:
                 test_flags.append("quantize")
@@ -202,12 +242,14 @@ class PyTestModelsTask(CompositeTask):
         use_shared_cache: bool = False,  # Use the global QAIHM cache rather than a temporary one for tests.
         skip_standard_unit_test: bool = False,
         test_trace: bool = True,
-        run_export_compile: bool = True,
         run_export_quantize: bool = False,
+        run_export_compile: bool = True,
         run_export_profile: bool = False,
+        run_export_inference: bool = False,
         run_full_export: bool = False,
         exit_after_single_model_failure=False,
         raise_on_failure=True,
+        qaihm_wheel_dir: str | os.PathLike | None = None,
     ):
         self.exit_after_single_model_failure = exit_after_single_model_failure
 
@@ -217,23 +259,40 @@ class PyTestModelsTask(CompositeTask):
 
         # Whether or not export tests will be run asynchronously
         # (submit all jobs for all models at once, rather than one model at a time).
-        test_hub_async: bool = os.environ.get("TEST_HUB_ASYNC", 0)
+        test_hub_async: bool = os.environ.get("QAIHM_TEST_HUB_ASYNC", 0)
 
-        if test_hub_async and run_export_compile:
-            # Clean previous (cached) compile test jobs.
-            tasks.append(
-                RunCommandsTask(
-                    "Delete stored compile jobs from past test runs.",
-                    f"> {os.environ['COMPILE_JOBS_FILE']}",
-                )
-            )
+        if test_hub_async and not on_ci():
+            for run_test, job_type in [
+                (run_export_quantize, "quantize"),
+                (run_export_compile, "compile"),
+                (run_export_profile, "profile"),
+                (run_export_inference, "inference"),
+            ]:
+                if run_test:
+                    # Clean previous cached test jobs.
+                    filename = os.getenv(
+                        "QAIHM_TEST_ARTIFACTS_DOR",
+                        os.path.join(
+                            os.getcwd(), "qaihm_test_artifacts", f"{job_type}-jobs.yaml"
+                        ),
+                    )
+                    tasks.append(
+                        RunCommandsTask(
+                            "Delete stored compile jobs from past test runs.",
+                            f'if [ -f "{filename}" ]; then rm "{filename}"; fi',
+                        )
+                    )
 
         has_venv = base_test_venv is not None
         if not has_venv and (not venv_for_each_model or test_hub_async):
             # Create Venv
             base_test_venv = os.path.join(BUILD_ROOT, "test", "base_venv")
             tasks.append(CreateVenvTask(base_test_venv, python_executable))
-            tasks.append(SyncLocalQAIHMVenvTask(base_test_venv, ["dev"]))
+            tasks.append(
+                SyncLocalQAIHMVenvTask(
+                    base_test_venv, ["dev"], qaihm_wheel_dir=qaihm_wheel_dir
+                )
+            )
 
         print(f"Tests to be run for models: {models_for_testing}")
         global_models = set()
@@ -249,7 +308,9 @@ class PyTestModelsTask(CompositeTask):
                     RunCommandsWithVenvTask(
                         group_name="Install Global Requirements",
                         venv=base_test_venv,
-                        commands=[f'pip install -r "{GLOBAL_REQUIREMENTS_PATH}" '],
+                        commands=[
+                            f'{get_pip()} install -r "{GLOBAL_REQUIREMENTS_PATH}" ',
+                        ],
                     )
                 )
 
@@ -281,12 +342,14 @@ class PyTestModelsTask(CompositeTask):
                     install_deps=not is_global_model,
                     run_trace=test_trace,
                     run_general=not skip_standard_unit_test,
+                    run_quantize=run_export_quantize and model_name in export_models,
                     run_compile=run_export_compile and model_name in export_models,
                     run_profile=run_export_profile and model_name in export_models,
-                    run_quantize=run_export_quantize and model_name in export_models,
+                    run_inference=run_export_inference and model_name in export_models,
                     run_export=run_full_export and model_name in export_models,
                     # Do not raise on failure; let PyTestModelsTask::run_tasks handle this
                     raise_on_failure=False,
+                    qaihm_wheel_dir=qaihm_wheel_dir,
                 )
             )
 

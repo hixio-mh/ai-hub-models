@@ -1,85 +1,133 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import cv2
 import numpy as np
 import torch
+from numba import njit, prange
+from torchvision.ops import batched_nms as tv_batched_nms
 from torchvision.ops import nms
 
 
 def batched_nms(
     iou_threshold: float,
-    score_threshold: float,
+    score_threshold: float | None,
     boxes: torch.Tensor,
     scores: torch.Tensor,
+    class_indices: torch.Tensor | None = None,
     *gather_additional_args,
 ) -> tuple[list[torch.Tensor], ...]:
     """
     Non maximum suppression over several batches.
 
     Inputs:
-        iou_threshold: float
+        iou_threshold
             Intersection over union (IoU) threshold
 
-        score_threshold: float
+        score_threshold
             Score threshold (throw away any boxes with scores under this threshold)
 
-        boxes: torch.Tensor
+        boxes
             Boxes to run NMS on. Shape is [B, N, 4], B == batch, N == num boxes, and 4 == (x1, x2, y1, y2)
 
-        scores: torch.Tensor
+        scores
             Scores for each box. Shape is [B, N], range is [0:1]
 
-        *gather_additional_args: torch.Tensor, ...
+        class_indices
+            Class for each box. Shape is [B, N].
+            If set, NMS is applied per-class rather than globally.
+
+        *gather_additional_args
             Additional tensor(s) to be gathered in the same way as boxes and scores.
             In other words, each arg is returned with only the elements for the boxes selected by NMS.
             Should be shape [B, N, ...]
 
     Outputs:
-        boxes_out: list[torch.Tensor]
+        boxes_out
             Output boxes. This is list of tensors--one tensor per batch.
             Each tensor is shape [S, 4], where S == number of selected boxes, and 4 == (x1, x2, y1, y2)
 
-        boxes_out: list[torch.Tensor]
+        boxes_out
             Output scores. This is list of tensors--one tensor per batch.
             Each tensor is shape [S], where S == number of selected boxes.
 
-        *args : list[torch.Tensor], ...
+        if class_indices is not None:
+            class_indices_out
+                Output classes. This is list of tensors--one tensor per batch.
+                Each tensor is shape [S], where S == number of selected boxes.
+                The list will be empty if class_indices was not set.
+
+        *args
             "Gathered" additional arguments, if provided.
     """
     scores_out: list[torch.Tensor] = []
     boxes_out: list[torch.Tensor] = []
+    class_indices_out: list[torch.Tensor] = []
     args_out: list[list[torch.Tensor]] = (
         [[] for _ in gather_additional_args] if gather_additional_args else []
     )
 
     for batch_idx in range(0, boxes.shape[0]):
-        # Clip outputs to valid scores
+        # Index to current batch.
         batch_scores = scores[batch_idx]
-        scores_idx = torch.nonzero(scores[batch_idx] >= score_threshold).squeeze(-1)
-        batch_scores = batch_scores[scores_idx]
-        batch_boxes = boxes[batch_idx, scores_idx]
-        batch_args = (
-            [arg[batch_idx, scores_idx] for arg in gather_additional_args]
-            if gather_additional_args
-            else []
+        batch_boxes = boxes[batch_idx]
+        batch_args = [arg[batch_idx] for arg in gather_additional_args or []]
+        batch_class_indices = (
+            class_indices[batch_idx] if class_indices is not None else None
         )
 
+        # Clip outputs to valid scores
+        if score_threshold is not None:
+            scores_idx = torch.nonzero(scores[batch_idx] >= score_threshold).squeeze(-1)
+            batch_scores = batch_scores[scores_idx]
+            batch_boxes = batch_boxes[scores_idx]
+            batch_class_indices = (
+                batch_class_indices[scores_idx]
+                if batch_class_indices is not None
+                else None
+            )
+            batch_args = [arg[scores_idx] for arg in batch_args or []]
+
         if len(batch_scores > 0):
-            nms_indices = nms(batch_boxes[..., :4], batch_scores, iou_threshold)
+            # Apply NMS
+            if batch_class_indices is not None:
+                # class dependent
+                nms_indices = tv_batched_nms(
+                    batch_boxes[..., :4],
+                    batch_scores,
+                    batch_class_indices,
+                    iou_threshold,
+                )
+            else:
+                # class agnostic
+                nms_indices = nms(batch_boxes[..., :4], batch_scores, iou_threshold)
+
+            # Apply NMS indices
             batch_boxes = batch_boxes[nms_indices]
             batch_scores = batch_scores[nms_indices]
+            batch_class_indices = (
+                batch_class_indices[nms_indices]
+                if batch_class_indices is not None
+                else None
+            )
             batch_args = [arg[nms_indices] for arg in batch_args]
 
+        # Append to outputs
         boxes_out.append(batch_boxes)
         scores_out.append(batch_scores)
+        if batch_class_indices is not None:
+            class_indices_out.append(batch_class_indices)
         for arg_idx, arg in enumerate(batch_args):
             args_out[arg_idx].append(arg)
 
-    return boxes_out, scores_out, *args_out
+    if class_indices is None:
+        return boxes_out, scores_out, *args_out
+    else:
+        return boxes_out, scores_out, class_indices_out, *args_out
 
 
 def compute_box_corners_with_rotation(
@@ -170,31 +218,55 @@ def compute_box_affine_crop_resize_matrix(
     return affines
 
 
-def box_xywh_to_xyxy(box_cwh: torch.Tensor) -> torch.Tensor:
+def box_xywh_to_xyxy(box_cwh: torch.Tensor, flat_boxes: bool = False) -> torch.Tensor:
     """
     Convert center, W, H to top left / bottom right bounding box values.
 
     Inputs:
         box_xy: torch.Tensor
-            Bounding box. Shape is [B, 2, 2]
-            [[xc, yc], [w, h]] * Batch
+            Bounding box.
+
+            If flat_boxes:
+                Shape is [..., 4]
+                Box layout is [xc, yc, w, h]
+
+            else:
+                Shape is [..., 2, 2]
+                [[xc, yc], [w, h]] * Batch
 
     Outputs: torch.Tensor
-        Output format is [[x0, y0], [x1, y1]]
+        If flat_boxes:
+            Output shape is [..., 4]
+            Output box layout is [x0, y0, x1, y1]
+        else:
+            Output shape is [..., 2, 2]
+            Output box layout is [[x0, y0], [x1, y1]]
     """
-    # Convert Xc, Yc, W, H to min and max bounding box values.
-    x_center = box_cwh[..., 0, 0]
-    y_center = box_cwh[..., 0, 1]
-    w = box_cwh[..., 1, 0]
-    h = box_cwh[..., 1, 1]
+    if flat_boxes:
+        cx = box_cwh[..., 0]
+        cy = box_cwh[..., 1]
+        w_2 = box_cwh[..., 2] * 0.5
+        h_2 = box_cwh[..., 3] * 0.5
 
-    out = torch.clone(box_cwh)
-    out[..., 0, 0] = x_center - w / 2.0  # x0
-    out[..., 0, 1] = y_center - h / 2.0  # y0
-    out[..., 1, 0] = x_center + w / 2.0  # x1
-    out[..., 1, 1] = y_center + h / 2.0  # y1
+        top_left_x = cx - w_2
+        top_left_y = cy - h_2
+        bot_right_x = cx + w_2
+        bot_right_y = cy + h_2
+        return torch.stack((top_left_x, top_left_y, bot_right_x, bot_right_y), -1)
+    else:
+        # Convert Xc, Yc, W, H to min and max bounding box values.
+        x_center = box_cwh[..., 0, 0]
+        y_center = box_cwh[..., 0, 1]
+        w = box_cwh[..., 1, 0]
+        h = box_cwh[..., 1, 1]
 
-    return out
+        out = torch.clone(box_cwh)
+        out[..., 0, 0] = x_center - w / 2.0  # x0
+        out[..., 0, 1] = y_center - h / 2.0  # y0
+        out[..., 1, 0] = x_center + w / 2.0  # x1
+        out[..., 1, 1] = y_center + h / 2.0  # y1
+
+        return out
 
 
 def box_xyxy_to_xywh(
@@ -227,6 +299,37 @@ def box_xyxy_to_xywh(
     out[..., 0, 1] = y0 + out[..., 1, 1] / 2  # yc
 
     return out
+
+
+def box_xywh_to_cs(
+    box_cwh: list, aspect_ratio: float, padding_factor: float = 1.0
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Convert bbox to center-scale format while maintaining aspect ratio.
+    Inputs:
+        box_cwh: List
+            Bounding box. Shape is [4,]
+            [xc, yc, w, h]
+        aspect_ratio: float
+            ratio between width and height
+        padding_factor: float
+            factor to apply additional padding to the scale. Defaults to 1.0
+
+    Outputs:
+        center: np.ndarray
+            center for bbox. Shape is [2,]
+        scale: np.ndarray
+            scale for bbox. Shape is [2,]
+    """
+    x, y, w, h = box_cwh
+    center = np.array([x + w * 0.5, y + h * 0.5], dtype=np.float32)
+
+    if w > aspect_ratio * h:
+        h = w / aspect_ratio
+    elif w < aspect_ratio * h:
+        w = h * aspect_ratio
+    scale = np.array([w, h], dtype=np.float32) * padding_factor
+    return center, scale
 
 
 def apply_directional_box_offset(
@@ -278,3 +381,42 @@ def get_iou(boxA: np.ndarray, boxB: np.ndarray) -> float:
     boxB_area = (boxB[2] - boxB[0] + 1) * (boxB[3] - boxB[1] + 1)
 
     return inter_area / float(boxA_area + boxB_area - inter_area)
+
+
+@njit(parallel=True)
+def get_bbox_iou_matrix(
+    boxes: np.ndarray, query_boxes: np.ndarray, criterion: int = -1
+) -> np.ndarray:
+    """Calculate axis-aligned 2D IoU between sets of bounding boxes.
+
+    Args:
+        boxes (np.ndarray): Predicted boxes in format [x1, y1, x2, y2], of shape (N, 4).
+        query_boxes (np.ndarray): Ground truth boxes in format [x1, y1, x2, y2], of shape (K, 4).
+        criterion (int): If 0, use area of box only; otherwise standard IoU.
+
+    Returns:
+        np.ndarray: IoU matrix of shape (N, K).
+    """
+    N, K = boxes.shape[0], query_boxes.shape[0]
+    overlaps = np.zeros((N, K), dtype=np.float32)
+    for k in prange(K):
+        qbox_area = (query_boxes[k, 2] - query_boxes[k, 0]) * (
+            query_boxes[k, 3] - query_boxes[k, 1]
+        )
+        for n in range(N):
+            iw = min(boxes[n, 2], query_boxes[k, 2]) - max(
+                boxes[n, 0], query_boxes[k, 0]
+            )
+            ih = min(boxes[n, 3], query_boxes[k, 3]) - max(
+                boxes[n, 1], query_boxes[k, 1]
+            )
+            if iw > 0 and ih > 0:
+                ua = (
+                    (boxes[n, 2] - boxes[n, 0]) * (boxes[n, 3] - boxes[n, 1])
+                    + qbox_area
+                    - iw * ih
+                )
+                if criterion == 0:
+                    ua = (boxes[n, 2] - boxes[n, 0]) * (boxes[n, 3] - boxes[n, 1])
+                overlaps[n, k] = iw * ih / ua
+    return overlaps

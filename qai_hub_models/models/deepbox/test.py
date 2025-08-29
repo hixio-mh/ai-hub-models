@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 
 from qai_hub_models.models.deepbox.app import DeepBoxApp
@@ -17,7 +18,7 @@ OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 
 
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
     input = load_image(
         INPUT_IMAGE_ADDRESS,
     )
@@ -25,10 +26,10 @@ def test_task():
         OUTPUT_IMAGE_ADDRESS,
     )
     wrapper = DeepBox.from_pretrained()
-    app = DeepBoxApp(wrapper.bbox2D_dectector, wrapper.bbox3D_dectector)
+    app = DeepBoxApp(wrapper.yolo_2d_det, wrapper.vgg_3d_det)
     assert np.allclose(np.asarray(app.detect_image(input)), np.asarray(expected_output))
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

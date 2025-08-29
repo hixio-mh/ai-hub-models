@@ -1,16 +1,21 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Optional, cast
 
 import torch
 from torch import nn
-from transformers.cache_utils import Cache, DynamicCache
-from transformers.models.llama.modeling_llama import LlamaAttention
+from transformers.cache_utils import Cache
+from transformers.models.llama.modeling_llama import (
+    LlamaAttention,
+    LlamaForCausalLM,
+    LlamaMLP,
+)
 
 
 # Copied from transformers.models.llama.modeling_llama.repeat_kv
@@ -67,47 +72,6 @@ def QcLlama_apply_rotary_pos_emb(
     return query_states, key_states
 
 
-class SHADynamicCacheNewValueOnly(DynamicCache):
-    """
-    Version of DynamicCache that stores the cache as lists for the separate
-    heads (so as to avoid concats/splits for SHA) and returning only the
-    new values without accumulation.
-    """
-
-    def update(
-        self,
-        key_states: torch.Tensor,
-        value_states: torch.Tensor,
-        layer_idx: int,
-        cache_kwargs: Optional[dict[str, Any]] = None,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Update the number of seen tokens
-        if layer_idx == 0:
-            # self._seen_tokens += key_states.shape[-2]
-            # This line is updated
-            self._seen_tokens += key_states[0].shape[-2]
-
-        # Update the cache
-        if len(self.key_cache) <= layer_idx:
-            self.key_cache.append(key_states)
-            self.value_cache.append(value_states)
-        else:
-            # Do not concatenate the cache, we only need the latest entry
-            self.key_cache[layer_idx] = key_states
-            self.value_cache[layer_idx] = value_states
-
-        return self.key_cache[layer_idx], self.value_cache[layer_idx]
-
-    def get_seq_length(self, layer_idx: Optional[int] = 0) -> int:
-        """Returns the sequence length of the cached states. A layer index can be optionally passed."""
-        if layer_idx is None:
-            layer_idx = 0
-        if len(self.key_cache) <= layer_idx:
-            return 0
-        # [0] added to get shape since the outermost is list
-        return self.key_cache[layer_idx][0].shape[-2]
-
-
 class SHALlamaAttention(LlamaAttention):
     """
     Split-Head Attention version of LlamaAttention (with Convs)
@@ -145,6 +109,18 @@ class SHALlamaAttention(LlamaAttention):
             del self.o_proj
 
     def prepare_sha(self):
+
+        # Ensure conv preparation is done first
+        if not (
+            hasattr(self, "q_proj_conv")
+            and hasattr(self, "k_proj_conv")
+            and hasattr(self, "o_proj_conv")
+            and hasattr(self, "v_proj_conv")
+        ):
+            raise RuntimeError(
+                "The method 'prepare_sha' cannot be run on model without running 'prepare_conv' first."
+            )
+
         if not hasattr(self, "forward_mha"):
             self.q_proj_sha = nn.ModuleList(
                 [
@@ -164,15 +140,25 @@ class SHALlamaAttention(LlamaAttention):
                     for _ in range(self.num_key_value_heads)
                 ]
             )
-            if not hasattr(self, "o_proj_conv"):
-                self.o_proj_conv = nn.Conv2d(
-                    self.num_heads * self.head_dim, self.hidden_size, 1, bias=False
-                )
-                self.o_proj_conv.weight.data.copy_(self.o_proj.weight[:, :, None, None])
-                del self.o_proj
 
-            self.forward_mha = self.forward
-
+            self.forward_mha = cast(  # type: ignore[misc]
+                Callable[
+                    [
+                        torch.Tensor,
+                        torch.Tensor | None,
+                        torch.LongTensor | None,
+                        Cache | None,
+                        bool,
+                        bool,
+                        torch.LongTensor | None,
+                        Any,
+                    ],
+                    tuple[
+                        torch.Tensor, torch.Tensor | None, tuple[torch.Tensor] | None
+                    ],
+                ],
+                self.forward,  # type: ignore[has-type]
+            )
             # pyright doesn't like that self.forward_sha doesn't take kwargs
             self.forward = (
                 self.forward_sha
@@ -310,3 +296,66 @@ class SHALlamaAttention(LlamaAttention):
         attn_weights_return = attn_weights if output_attentions else None
 
         return attn_output_return, attn_weights_return, past_key_value
+
+
+class ConvInplaceLinear(torch.nn.Conv2d):
+    def __init__(self, module):
+        assert isinstance(module, torch.nn.Linear)
+        weight, bias = module.weight, module.bias
+        self.out_features, self.in_features = weight.shape
+
+        super().__init__(
+            self.in_features,
+            self.out_features,
+            1,
+            dtype=module.weight.dtype,
+            bias=True if bias is not None else False,
+        )
+
+        self.weight.data.copy_(weight.data[:, :, None, None])
+        if bias is not None:
+            self.bias.data.copy_(bias.data)
+        self.to(module.weight.data.device)
+
+    def forward(self, x: torch.Tensor, scale: float = 1.0):
+        ndim = x.ndim
+        if ndim == 2:
+            x = (
+                x.unsqueeze(0).unsqueeze(-1).permute(0, 2, 3, 1)
+            )  # (emb_dim, C) -> (1, C, 1, emb_dim)
+        elif ndim == 3:
+            x = x.unsqueeze(-1).permute(
+                0, 2, 3, 1
+            )  # (B, emb_dim, C) -> (B, C, 1, emb_dim)
+        elif ndim == 4:
+            x = x.permute(0, 3, 1, 2)  # (B, H, W, C) -> (B, C, H, W)
+        else:
+            raise NotImplementedError(
+                f"{self.__class__.__name__} could not handle input with shape {x.shape}"
+            )
+
+        x = super().forward(x)
+
+        if ndim == 2:
+            return (
+                x.permute(0, 3, 1, 2).squeeze(-1).squeeze(0)
+            )  # (1, C, 1, emb_dim) -> # (emb_dim, C)
+        elif ndim == 3:
+            return x.permute(0, 3, 1, 2).squeeze(
+                -1
+            )  # (1, C, 1, emb_dim) -> # (B, emb_dim, C)
+        elif ndim == 4:
+            x = x.permute(0, 2, 3, 1)  # (B, C, H, W) -> (B, H, W, C)
+        return x
+
+
+class QCLlamaMLP(LlamaMLP):
+    def prepare_conv(self):
+        self.up_proj = ConvInplaceLinear(self.up_proj)  # type: ignore[has-type]
+        self.down_proj = ConvInplaceLinear(self.down_proj)  # type: ignore[has-type]
+        self.gate_proj = ConvInplaceLinear(self.gate_proj)  # type: ignore[has-type]
+
+
+class QCLlamaForCausalLM(LlamaForCausalLM):
+    def prepare_conv(self):
+        self.lm_head = ConvInplaceLinear(self.lm_head)  # type: ignore[has-type]

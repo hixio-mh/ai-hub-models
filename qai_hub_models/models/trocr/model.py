@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import copy
@@ -32,57 +33,6 @@ Traceable modules used by TrOCRApp
 KVCache = tuple[torch.Tensor, ...]  # Export friendly
 
 
-class TrOCR(CollectionModel):
-    def __init__(
-        self,
-        encoder: Callable[[torch.Tensor], KVCache],
-        decoder: Callable[..., tuple[torch.Tensor, ...]],
-        io_processor: TrOCRProcessor,
-        pad_token_id: int = 1,
-        eos_token_id: int = 2,
-        start_token_id: int = 2,
-        max_seq_len: int = 20,
-        num_decoder_layers: int = DEFAULT_NUM_DECODER_LAYERS,
-        decoder_attention_heads: int = 8,
-        embeddings_per_head: int = 32,
-    ):
-        self.encoder = encoder
-        self.decoder = decoder
-        self.io_processor = io_processor
-        self.pad_token_id = pad_token_id
-        self.eos_token_id = eos_token_id
-        self.start_token_id = start_token_id
-        self.max_seq_len = max_seq_len
-        self.num_decoder_layers = num_decoder_layers
-        self.decoder_attention_heads = decoder_attention_heads
-        self.embeddings_per_head = embeddings_per_head
-
-    @classmethod
-    def from_pretrained(cls, hf_trocr_model: str = HUGGINGFACE_TROCR_MODEL) -> TrOCR:
-        # Load Huggingface source
-        source_model = VisionEncoderDecoderModel.from_pretrained(
-            hf_trocr_model, return_dict=False
-        )
-        io_processor = TrOCRProcessor.from_pretrained(hf_trocr_model)
-        return TrOCR.from_source_model(source_model, io_processor)  # type: ignore
-
-    @staticmethod
-    def from_source_model(
-        source_model: VisionEncoderDecoderModel, io_processor: TrOCRProcessor
-    ) -> TrOCR:
-        encoder = TrOCREncoder(source_model.encoder, source_model.decoder)  # type: ignore
-        decoder = TrOCRDecoder(source_model.decoder)  # type: ignore
-        return TrOCR(
-            encoder,
-            decoder,
-            io_processor,
-            source_model.generation_config.pad_token_id,  # type: ignore
-            source_model.generation_config.eos_token_id,  # type: ignore
-            (source_model.generation_config.decoder_start_token_id or source_model.generation_config.bos_token_id),  # type: ignore
-            source_model.generation_config.max_length,  # type: ignore
-        )
-
-
 class TrOCREncoder(BaseModel):
     """Vision encoder that returns the decoder's cross attn cache state."""
 
@@ -90,7 +40,9 @@ class TrOCREncoder(BaseModel):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
-        self.cross_attn_kv_shape: Callable = decoder.model.decoder.layers[0].encoder_attn._shape  # type: ignore
+        self.cross_attn_kv_shape: Callable = decoder.model.decoder.layers[
+            0
+        ].encoder_attn._shape
 
     def forward(
         self,
@@ -100,18 +52,22 @@ class TrOCREncoder(BaseModel):
         Run the encoder on `pixel_values`, and produce a cross attention key/value cache that can be used as decoder input.
 
         Parameters:
-            pixel_values: Pixel values pre-processed for encoder consumption.
+            pixel_values:
+                Pixel values pre-processed for encoder consumption.
+                Range: float[0, 1]
+                3-channel Color Space: RGB
 
         Returns:
             cross_attn_kv_cache: tuple[kv_cache_cross_attn_0_key, kv_cache_cross_attn_0_val, kv_cache_cross_attn_1_key, ...]
                 KV Cache for cross attention layers.
                 len(tuple) == 2 * number of source model decoder layers.
         """
+        pixel_values = pixel_values * 2 - 1
         encoder_hidden_states = self.encoder(pixel_values, return_dict=False)[0]
         kv_cache = []
         batch_size = encoder_hidden_states.shape[0]
         for layer in self.decoder.model.decoder.layers:
-            layer_attn: TrOCRAttention = layer.encoder_attn  # type: ignore
+            layer_attn: TrOCRAttention = layer.encoder_attn
             key_states = self.cross_attn_kv_shape(
                 layer_attn.k_proj(encoder_hidden_states), -1, batch_size
             )
@@ -167,10 +123,10 @@ class TrOCRDecoder(BaseModel):
         # Delete unused layers that exist only to generate initial KV cache.
         self.num_decoder_layers = len(self.decoder.model.decoder.layers)
         for layer in self.decoder.model.decoder.layers:
-            layer_attn: TrOCRAttention = layer.encoder_attn  # type: ignore
-            layer_attn.k_proj = None  # type: ignore
-            layer_attn.v_proj = None  # type: ignore
-        self.max_position_embeddings: int = self.decoder.config.max_position_embeddings  # type: ignore
+            layer_attn: TrOCRAttention = layer.encoder_attn
+            layer_attn.k_proj = None  # pyright: ignore[reportAttributeAccessIssue]
+            layer_attn.v_proj = None  # pyright: ignore[reportAttributeAccessIssue]
+        self.max_position_embeddings: int = self.decoder.config.max_position_embeddings
         self.decoder_attention_heads: int = decoder.config.decoder_attention_heads
         self.embeddings_per_head: int = (
             decoder.config.d_model // decoder.config.decoder_attention_heads
@@ -238,7 +194,6 @@ class TrOCRDecoder(BaseModel):
             if len(curr_tuple) == 4:
                 kv_cache.append((*curr_tuple,))
                 curr_tuple = []
-        kv_cache = (*kv_cache,)  # type: ignore
         attn_mask = self.attn_mask(index)
         # (tgt_len,) -> (batch, 1, tgt_len, src_len)
 
@@ -249,7 +204,7 @@ class TrOCRDecoder(BaseModel):
             encoder_hidden_states=encoder_hidden_states,
             return_dict=False,
             use_cache=True,
-            past_key_values=kv_cache,
+            past_key_values=tuple(kv_cache),
         )
 
         # KV Cache conversion to export-friendly format (tuple of tensors)
@@ -336,3 +291,74 @@ class TrOCRDecoder(BaseModel):
     @classmethod
     def from_pretrained(cls):
         return TrOCR.from_pretrained().decoder
+
+
+@CollectionModel.add_component(TrOCRDecoder)
+@CollectionModel.add_component(TrOCREncoder)
+class TrOCR(CollectionModel):
+    def __init__(
+        self,
+        encoder: Callable[[torch.Tensor], KVCache],
+        decoder: Callable[..., tuple[torch.Tensor, ...]],
+        io_processor: TrOCRProcessor,
+        pad_token_id: int = 1,
+        eos_token_id: int = 2,
+        start_token_id: int = 2,
+        max_seq_len: int = 20,
+        num_decoder_layers: int = DEFAULT_NUM_DECODER_LAYERS,
+        decoder_attention_heads: int = 8,
+        embeddings_per_head: int = 32,
+    ):
+        super().__init__(decoder, encoder)
+        self.encoder = encoder
+        self.decoder = decoder
+        self.io_processor = io_processor
+
+        # We want all models in our repo to take [0, 1] image inputs
+        # and normalize in the model.
+        self.io_processor.image_processor.image_mean = [0.0, 0.0, 0.0]  # type: ignore[attr-defined]
+        self.io_processor.image_processor.image_std = [1.0, 1.0, 1.0]  # type: ignore[attr-defined]
+        self.pad_token_id = pad_token_id
+        self.eos_token_id = eos_token_id
+        self.start_token_id = start_token_id
+        self.max_seq_len = max_seq_len
+        self.num_decoder_layers = num_decoder_layers
+        self.decoder_attention_heads = decoder_attention_heads
+        self.embeddings_per_head = embeddings_per_head
+
+    @classmethod
+    def from_pretrained(cls, hf_trocr_model: str = HUGGINGFACE_TROCR_MODEL) -> TrOCR:
+        # Load Huggingface source
+        source_model = VisionEncoderDecoderModel.from_pretrained(
+            hf_trocr_model, return_dict=False
+        )
+        io_processor = TrOCRProcessor.from_pretrained(hf_trocr_model)
+
+        assert isinstance(source_model, VisionEncoderDecoderModel)
+        assert isinstance(io_processor, TrOCRProcessor)
+        return TrOCR.from_source_model(source_model, io_processor)
+
+    @staticmethod
+    def from_source_model(
+        source_model: VisionEncoderDecoderModel, io_processor: TrOCRProcessor
+    ) -> TrOCR:
+        assert source_model.encoder is not None
+        encoder = TrOCREncoder(
+            source_model.encoder, source_model.decoder
+        )  # pyright: ignore[reportArgumentType]
+        decoder = TrOCRDecoder(
+            source_model.decoder
+        )  # pyright: ignore[reportArgumentType]
+        assert source_model.generation_config is not None
+        return TrOCR(
+            encoder,
+            decoder,
+            io_processor,
+            source_model.generation_config.pad_token_id,
+            source_model.generation_config.eos_token_id,
+            (
+                source_model.generation_config.decoder_start_token_id
+                or source_model.generation_config.bos_token_id
+            ),
+            source_model.generation_config.max_length,
+        )

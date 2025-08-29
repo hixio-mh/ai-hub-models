@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 NO_LICENSE = "This model's original implementation does not provide a LICENSE."
@@ -41,17 +42,23 @@ def _get_references(
     research_paper_title: str | None,
     research_paper_url: str | None,
     source_repo: str | None,
-):
-    if (
-        research_paper_url is None
-        and research_paper_url is None
-        and source_repo is None
-    ):
+) -> str:
+    smi = ""
+    if source_repo:
+        smi = f"\n* [Source Model Implementation]({source_repo})"
+    rp = ""
+    if research_paper_title and research_paper_url:
+        rp = f"\n* [{research_paper_title}]({research_paper_url})"
+    elif (not research_paper_title) ^ (not research_paper_url):
+        raise ValueError(
+            "research_paper_title and research_paper_url should both be set or both be None."
+        )
+
+    if not smi and not rp:
         return ""
+
     return f"""
-## References
-* [{research_paper_title}]({research_paper_url})
-* [Source Model Implementation]({source_repo})
+## References{rp}{smi}
 
 """
 
@@ -71,11 +78,37 @@ def _get_licenses(
 """
 
 
-def _get_package_instructions(model_id: str, pip_install_flags: str | None):
+def _get_package_instructions(
+    model_id: str,
+    pip_install_flags: str | None,
+    model_has_reqs: bool,
+    pip_install_flags_gpu: str | None = None,
+):
     # Use dashes in model name to avoid an issue where older pip versions may not install modules correctly.
+    install_pkg = "qai-hub-models" + (
+        f'[{model_id.replace("_", "-")}]' if model_has_reqs else ""
+    )
+    if model_has_reqs:
+        # Package extras include brackets in the package name, which confuses
+        # shells like zsh unless contained within quotes.
+        install_pkg = f'"{install_pkg}"'
+
+    gpu_installation_instructions = ""
+    if pip_install_flags_gpu:
+        gpu_installation_instructions = f"""
+
+Note: GPU is unnecessary if you wish to only export the model for on-device deployment.
+
+For {model_id}, a dedicated CUDA enabled GPU (40 GB VRAM for 3B models to 80 GB VRAM for 8B models) is needed to quantize the model on your local machine. GPU can also increase the speed of evaluation and demo of your quantized model significantly.
+Install the GPU package via pip:
+```bash
+pip install {install_pkg}{f' {pip_install_flags_gpu}'}
+```
+"""
+
     return f"""
 Install the package via pip:
 ```bash
-pip install \"qai-hub-models[{model_id.replace("_", "-")}]\"{f' {pip_install_flags}' if pip_install_flags else ''}
-```
+pip install {install_pkg}{f' {pip_install_flags}' if pip_install_flags else ''}
+```{gpu_installation_instructions}
 """

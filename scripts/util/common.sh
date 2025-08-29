@@ -1,7 +1,10 @@
+#!/usr/bin/env bash
+
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 # Common utilities
 
 # shellcheck disable=SC2034 # various definitions appear unused in this included source.
@@ -59,21 +62,6 @@ function die() {
 }
 
 #
-# Run something as root, using sudo if necessary.
-#
-function run_as_root()
-{
-    # Don't use sudo if user is root already (e.g., in docker)
-    if [ "${EUID}" -eq 0 ]; then
-        log_debug "We're already root; running ${*} without sudo."
-        "${@}"
-    else
-        log_debug "We're ${EUID}; running ${*} via sudo."
-        sudo "${@}"
-    fi
-}
-
-#
 # Enable trace logging via set -x
 # Args
 #  1: [Default: $QAIHM_BUILD_XTRACE] If set to non-empty, enable tracing
@@ -100,4 +88,20 @@ function pretty_print_arr() {
   arr=("$@")
 
   echo "[$(echo "${arr[@]}" | tr ' ' ',')]"
+}
+
+function run_as_root()
+{
+    # Don't use sudo if user is root already (e.g., in docker)
+    if [ "${EUID}" -eq 0 ]; then
+        log_debug "We're already root; running ${*} without sudo."
+        "${@}"
+    else
+        log_debug "We're ${EUID}; running ${*} via sudo."
+        if [ -n "${GITHUB_ACTION}" ]; then
+            SUDO_ASKPASS="${REPO_ROOT}/scripts/ci/gh_askpass.sh" sudo --askpass "${@}"
+        else
+            sudo "${@}"
+        fi
+    fi
 }

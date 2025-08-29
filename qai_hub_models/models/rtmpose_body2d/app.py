@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from collections.abc import Callable
@@ -96,7 +97,7 @@ def add_skeleton_edges(
     """
     Draws Lines connecting specified keypoiny pairs to from a skeleton.
     """
-    for (p1, p2) in skeleton:
+    for p1, p2 in skeleton:
         x1, y1 = points[p1]
         x2, y2 = points[p2]
         cv2.line(img, (x1, y1), (x2, y2), color=color, thickness=thickness)
@@ -159,7 +160,6 @@ class RTMPosebody2dApp:
         pixel_values_or_image: torch.Tensor | np.ndarray | Image | list[Image],
         raw_output=False,
     ) -> np.ndarray | list[Image]:
-
         """
         Predicts pose keypoints for a person in the image.
 

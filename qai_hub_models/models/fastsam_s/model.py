@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from qai_hub_models.models._shared.fastsam.model import Fast_SAM
@@ -16,4 +17,6 @@ class FastSAM_S(Fast_SAM):
 
     @classmethod
     def from_pretrained(cls, ckpt_name: str = DEFAULT_WEIGHTS):
-        return Fast_SAM.from_pretrained.__func__(FastSAM_S, ckpt_name)
+        # It seems that we're using __func__ directly to ensure that the
+        # returned object is a FastSAM_S rather than a FastSAM.
+        return Fast_SAM.from_pretrained.__func__(FastSAM_S, ckpt_name)  # type: ignore[attr-defined]

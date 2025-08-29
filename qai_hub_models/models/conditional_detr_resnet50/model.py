@@ -1,12 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
-import torch
 from transformers import ConditionalDetrForObjectDetection
 
+from qai_hub_models.evaluators.base_evaluators import BaseEvaluator
+from qai_hub_models.evaluators.detection_evaluator import DetectionEvaluator
 from qai_hub_models.models._shared.detr.model import DETR
 
 MODEL_ID = __name__.split(".")[-2]
@@ -21,18 +23,13 @@ class ConditionalDETRResNet50(DETR):
     def from_pretrained(cls, ckpt_name: str = DEFAULT_WEIGHTS):
         return cls(ConditionalDetrForObjectDetection.from_pretrained(ckpt_name))
 
-    def forward(self, image: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def get_evaluator(self) -> BaseEvaluator:
         """
-        Run DETR on `image` and `mask`, and produce high quality detection results.
+        Returns an instance of the DetectionEvaluator class, which is used to evaluate the performance of the DETR model.
 
-        Parameters:
-            image: Image tensor to run detection on.
-            mask: This represents the padding mask. True if padding was applied on that pixel else False.
+        The DetectionEvaluator class is used to compute the mean average precision (mAP) of the model's predictions.
 
-        Returns:
-            logits: [1, 100 (number of predictions), 92 (number of classes)]
-            boxes: [1, 100, 4], 4 == (center_x, center_y, w, h)
-
+        :return: An instance of the DetectionEvaluator class
         """
-        predictions = self.model(image)
-        return predictions[0], predictions[1]
+        image_height, image_width = self.get_input_spec()["image"][0][2:]
+        return DetectionEvaluator(image_height, image_width, score_threshold=0.4)

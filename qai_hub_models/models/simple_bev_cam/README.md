@@ -1,9 +1,6 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
+# [Simple-Bev: Construct a bird's eye view from sensors mounted on a vehicle](https://aihub.qualcomm.com/models/simple_bev_cam)
 
-
-# [Simple-Bev: Construct a bird’s eye view from sensors mounted on a vehicle](https://aihub.qualcomm.com/models/simple_bev_cam)
-
-Simple_bev is a machine learning model for generating a birds eye view represenation from the sensors(cameras) mounted on a vehicle. It uses the ResNet-101 as the backbone and segnet as a segmentation model for specific use cases.
+Simple-Bev is a machine learning model for generating a bird's eye view representation from the sensors (cameras) mounted on a vehicle. It uses ResNet-101 as the backbone and segnet as a segmentation model for specific use cases.
 
 This is based on the implementation of Simple-Bev found [here](https://github.com/aharley/simple_bev/blob/main/nets/segnet.py). This repository contains scripts for optimized on-device
 export suitable to run on Qualcomm® devices. More details on model performance
@@ -15,6 +12,11 @@ accross various devices, can be found [here](https://aihub.qualcomm.com/models/s
 
 
 ## Example & Usage
+
+Install the package via pip:
+```bash
+pip install qai-hub-models
+```
 
 
 Once installed, run the following simple CLI demo:
@@ -35,8 +37,7 @@ on-device deployment. This can be run as follows:
 ```bash
 python -m qai_hub_models.models.simple_bev_cam.export
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -54,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

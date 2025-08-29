@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [FFNet-54S: Semantic segmentation for automotive street scenes](https://aihub.qualcomm.com/models/ffnet_54s)
 
 FFNet-54S is a "fuss-free network" that segments street scene images with per-pixel classes like road, sidewalk, and pedestrian. Trained on the Cityscapes dataset.
@@ -25,7 +22,7 @@ pip install "qai-hub-models[ffnet-54s]"
 Once installed, run the following simple CLI demo:
 
 ```bash
-python -m qai_hub_models.models.ffnet_54s.demo
+python -m qai_hub_models.models.ffnet_54s.demo { --quantize w8a8 }
 ```
 More details on the CLI tool can be found with the `--help` option. See
 [demo.py](demo.py) for sample usage of the model including pre/post processing
@@ -38,10 +35,9 @@ This repository contains export scripts that produce a model optimized for
 on-device deployment. This can be run as follows:
 
 ```bash
-python -m qai_hub_models.models.ffnet_54s.export
+python -m qai_hub_models.models.ffnet_54s.export { --quantize w8a8 }
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -59,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

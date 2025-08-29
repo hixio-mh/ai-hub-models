@@ -1,13 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import datetime
 import functools
 import re
 import time
 from collections.abc import Callable
-from typing import Optional
+from typing import Any, Optional
 
 from .task import Task
 from .util import echo
@@ -35,6 +36,20 @@ def public_task(description: str):
 
 
 def depends(deps: list[str]):
+    def add_dep(func):
+        TASK_DEPENDENCIES[func.__name__] = deps
+        return func
+
+    return add_dep
+
+
+def depends_if(obj: Any, eq: list[tuple[Any, list[str]]], default: list[str] = []):
+    deps = default
+    for obj_ep, deps_candidate in eq:
+        if obj == obj_ep:
+            deps = deps_candidate
+            break
+
     def add_dep(func):
         TASK_DEPENDENCIES[func.__name__] = deps
         return func
@@ -124,7 +139,7 @@ class Plan:
             return
 
         step_id_lens = [len(s) for s, d in self._step_durations]
-        max_step_id_len = functools.reduce(lambda a, b: a if a > b else b, step_id_lens)  # type: ignore
+        max_step_id_len = functools.reduce(lambda a, b: a if a > b else b, step_id_lens)
         print(f"{'Step':^{max_step_id_len}} {'Duration':^14}")
         print(f"{'-':-^{max_step_id_len}} {'-':-^14}")
         for step_id, duration in self._step_durations:

@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
@@ -33,7 +34,7 @@ class DeepLabV3Model(BaseModel):
     def get_evaluator(self) -> BaseEvaluator:
         return SegmentationOutputEvaluator(NUM_CLASSES)
 
-    def forward(self, image):
+    def forward(self, image: torch.Tensor) -> torch.Tensor:
         """
         Run DeepLabV3_Plus_Mobilenet on `image`, and produce a tensor of classes for segmentation
 
@@ -43,7 +44,7 @@ class DeepLabV3Model(BaseModel):
                    3-channel Color Space: RGB
 
         Returns:
-            tensor: Bx21xHxW tensor of class logits per pixel
+           tensor: BxHxW tensor of class indices per pixel
         """
         if self.normalize_input:
             image = normalize_image_torchvision(image)
@@ -83,3 +84,11 @@ class DeepLabV3Model(BaseModel):
             h, w = input_spec["image"][0][2:]
             image = image.resize((w, h))
         return {"image": [app_to_net_image_inputs(image)[1].numpy()]}
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["pascal_voc"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "pascal_voc"

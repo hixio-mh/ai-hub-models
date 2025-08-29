@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 
 from qai_hub_models.models.mediapipe_selfie.app import SelfieSegmentationApp
@@ -19,17 +20,17 @@ OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 )
 
 
-def test_output():
+def test_output() -> None:
     input_img = load_image(
         IMAGE_ADDRESS,
     )
     model = SelfieSegmentation.from_pretrained()
     output = SelfieSegmentationApp(model).predict(input_img)
-    expected_output = load_image(
+    expected_output_image = load_image(
         OUTPUT_IMAGE_ADDRESS,
     ).convert("L")
 
-    expected_output = np.array(expected_output)
+    expected_output = np.array(expected_output_image)
     np.testing.assert_allclose(
         np.round(np.asarray(expected_output, dtype=np.float32) / 255, 2),
         np.round(np.asarray(output, dtype=np.float32), 2),
@@ -38,5 +39,5 @@ def test_output():
     )
 
 
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

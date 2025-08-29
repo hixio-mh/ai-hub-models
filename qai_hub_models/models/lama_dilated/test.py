@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 import pytest
 
@@ -22,7 +23,7 @@ OUTPUT_ADDRESS = CachedWebModelAsset.from_asset_store(
 
 
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
     app = RepaintMaskApp(LamaDilated.from_pretrained())
 
     img = load_image(IMAGE_ADDRESS)
@@ -41,7 +42,7 @@ def test_task():
 
 @pytest.mark.trace
 @skip_clone_repo_check
-def test_trace():
+def test_trace() -> None:
     net = LamaDilated.from_pretrained()
     input_spec = net.get_input_spec()
     trace = net.convert_to_torchscript(input_spec)
@@ -62,6 +63,6 @@ def test_trace():
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     # Run demo and verify it does not crash
     demo_main(is_test=True)

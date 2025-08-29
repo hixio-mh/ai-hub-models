@@ -1,13 +1,15 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
-from typing import Callable
 
+import cv2
 import numpy as np
+import numpy.typing as npt
 import torch
 from PIL import Image
 
@@ -16,6 +18,8 @@ from qai_hub_models.models.deepbox.model import (
     DEEPBOX_SOURCE_REPOSITORY,
     MODEL_ASSET_VERSION,
     MODEL_ID,
+    VGG3DDetection,
+    Yolo2DDetection,
 )
 from qai_hub_models.utils.asset_loaders import SourceAsRoot, find_replace_in_repo
 from qai_hub_models.utils.bounding_box_processing import batched_nms
@@ -56,13 +60,8 @@ class DeepBoxApp:
 
     def __init__(
         self,
-        bbox2D_dectector: Callable[
-            [torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]
-        ],
-        bbox3D_dectector: Callable[
-            [np.array, torch.Tensor, torch.Tensor],
-            tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[list]],
-        ],
+        bbox2D_dectector: Yolo2DDetection,
+        bbox3D_dectector: VGG3DDetection,
         nms_score_threshold: float = 0.5,
         nms_iou_threshold: float = 0.3,
     ):
@@ -72,11 +71,11 @@ class DeepBoxApp:
         Inputs:
             bbox2D_dectector: Callable[[torch.Tensor], tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
                 The 2D boundary box dectection model.
-                Input is an image [N C H W], channel layout is BGR, output is [pred_boxes, pred_scores, pred_class_idx].
+                Input is an image [N C H W], channel layout is RGB [0-1], output is [pred_boxes, pred_scores, pred_class_idx].
 
             bbox3D_dectector: Callable[[torch.Tensor], tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[list]]],
                 The 3D boundary box dectection model.
-                Input is an image [N C H W], channel layout is BGR, output is [proj_matrix, orient, dim, location].
+                Input is an image [N C H W], channel layout is RGB [0-1], output is [proj_matrix, orient, dim, location].
 
             nms_score_threshold: float
                 Score threshold for when NMS is run on the detector output boxes.
@@ -95,21 +94,22 @@ class DeepBoxApp:
 
     def detect_image(
         self,
-        image: torch.Tensor | np.ndarray | Image | list[Image],
+        image: Image.Image,
         raw_output: bool = False,
-    ) -> tuple[list[np.ndarray], list[np.ndarray], list[np.ndarray], list[list]] | list[
-        Image.Image
-    ]:
+    ) -> (
+        tuple[
+            list[npt.NDArray[np.float64]],
+            list[np.float64],
+            list[npt.NDArray[np.float32]],
+            list[list[np.float64]],
+        ]
+        | Image.Image
+    ):
         """
         From the provided image or tensor, predict the 3d bounding boxes & classes of objects detected within.
 
         Parameters:
-            pixel_values_or_image: torch.Tensor
-                PIL image
-                or
-                numpy array (N H W C x uint8) or (H W C x uint8) -- both BGR channel layout
-                or
-                pyTorch tensor (N C H W x fp32, value range is [0, 1]), BGR channel layout
+            image: PIL image
 
         Returns:
             if raw_output is False, returns
@@ -132,20 +132,22 @@ class DeepBoxApp:
         (H_resized, W_resized) = self.yolo.get_input_spec()["image"][0][-2:]
         image_resized = image.resize((W_resized, H_resized))
 
-        pred_boxes, pred_scores, pred_class_idx = self.detect_2d_bboxes(image_resized)
+        raw_pred_boxes, pred_scores, pred_class_idx = self.detect_2d_bboxes(
+            image_resized
+        )
 
         # Converting output floating point box coordinates to the input image's coordinate space
         height_scale = H / H_resized
         width_scale = W / W_resized
-        pred_boxes = pred_boxes[0]
+        pred_boxes = raw_pred_boxes[0]
         pred_boxes[:, (0, 2)] = pred_boxes[:, (0, 2)] * width_scale
         pred_boxes[:, (1, 3)] = pred_boxes[:, (1, 3)] * height_scale
 
         # Detect 3d bboxes for each objects detected
-        locations = []
-        proj_matrixes = []
-        orients = []
-        dims = []
+        proj_matrixes: list[npt.NDArray[np.float64]] = []
+        orients: list[np.float64] = []
+        dims: list[npt.NDArray[np.float32]] = []
+        locations: list[list[np.float64]] = []
         for i in range(pred_scores[0].shape[0]):
             output = self.detect_3d_bboxes(
                 numpy_image, pred_boxes[i], pred_class_idx[0][i]
@@ -163,7 +165,9 @@ class DeepBoxApp:
         img = Image.fromarray(numpy_image)
         return img
 
-    def detect_2d_bboxes(self, image_resized):
+    def detect_2d_bboxes(
+        self, image_resized: Image.Image
+    ) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
         _, NCHW_fp32_torch_frames = app_to_net_image_inputs(image_resized)
 
         pred_boxes, pred_scores, pred_class_idx = self.yolo(NCHW_fp32_torch_frames)
@@ -178,7 +182,20 @@ class DeepBoxApp:
 
         return pred_boxes, pred_scores, pred_class_idx
 
-    def detect_3d_bboxes(self, numpy_image, pred_boxes, pred_class_idx):
+    def detect_3d_bboxes(
+        self,
+        numpy_image: np.ndarray,  # H W C, int8 [0, 255] image
+        pred_boxes: torch.Tensor,
+        pred_class_idx: torch.Tensor,
+    ) -> (
+        tuple[
+            npt.NDArray[np.float64],
+            np.float64,
+            npt.NDArray[np.float32],
+            list[np.float64],
+        ]
+        | None
+    ):
         averages = ClassAverages.ClassAverages()
         angle_bins = Dataset.generate_bins(2)
 
@@ -204,18 +221,26 @@ class DeepBoxApp:
         if not averages.recognized_class(detected_class):
             return None
 
-        # convert from BGR to RGB
-        image_bgr = numpy_image[..., ::-1]
         detectedObject = Dataset.DetectedObject(
-            image_bgr, detected_class, box_2d, calib_file
+            numpy_image, detected_class, box_2d, calib_file
         )
-
         theta_ray = detectedObject.theta_ray
-        input_img = detectedObject.img
         proj_matrix = detectedObject.proj_matrix
 
+        # Crop to detected bounding box, reshape to input of vgg net
+        pt1 = box_2d[0]
+        pt2 = box_2d[1]
+        cropped_image = numpy_image[pt1[1] : pt2[1] + 1, pt1[0] : pt2[0] + 1]
+        # Note that this resize does not preserve aspect ratio. While odd, this is the implementation in the original paper, so we kept it.
+        cropped_image = cv2.resize(
+            cropped_image, dsize=(224, 224), interpolation=cv2.INTER_CUBIC
+        )
+        cropped_image = cropped_image.astype(np.float32) / 255.0
+
         # detect the 3d bbox
-        [orient, conf, dim] = self.vgg(input_img.unsqueeze(0))
+        [orient, conf, dim] = self.vgg(
+            torch.as_tensor(cropped_image.transpose(2, 0, 1)).unsqueeze(0)
+        )
         orient = orient.numpy()[0, :, :]
         conf = conf.numpy()[0, :]
         dim = dim.numpy()[0, :]

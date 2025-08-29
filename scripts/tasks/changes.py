@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import functools
 import os
 from collections.abc import Iterable
@@ -9,13 +10,15 @@ from pathlib import Path
 from typing import Optional
 
 from .constants import (
+    PUBLIC_BENCH_MODELS,
     PY_PACKAGE_MODELS_ROOT,
     PY_PACKAGE_RELATIVE_MODELS_ROOT,
     PY_PACKAGE_RELATIVE_SRC_ROOT,
     REPO_ROOT,
+    STATIC_MODELS_ROOT,
 )
 from .github import on_github
-from .util import new_cd, run, run_and_get_output
+from .util import get_is_hub_quantized, new_cd, run, run_and_get_output
 
 REPRESENTATIVE_EXPORT_MODELS = [
     "sinet",
@@ -38,15 +41,27 @@ MANUAL_EDGES = {
         "qai_hub_models/models/xlsr_quantized/model.py",
         "qai_hub_models/models/resnet18_quantized/model.py",
     ],
+    "qai_hub_models/datasets/__init__.py": [
+        "qai_hub_models/models/yolov7_quantized/model.py"
+    ],
+    "qai_hub_models/models/common.py": REPRESENTATIVE_EXPORT_FILES,
     "qai_hub_models/utils/base_config.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/utils/collection_model_helpers.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/scorecard/execution_helpers.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/utils/base_model.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/utils/quantization.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/utils/input_spec.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/utils/qai_hub_helpers.py": REPRESENTATIVE_EXPORT_FILES,
     "qai_hub_models/utils/inference.py": REPRESENTATIVE_EXPORT_FILES,
     "qai_hub_models/utils/evaluate.py": REPRESENTATIVE_EXPORT_FILES,
     "qai_hub_models/utils/printing.py": REPRESENTATIVE_EXPORT_FILES,
-    "qai_hub_models/models/_configs/code_gen_yaml.py": REPRESENTATIVE_EXPORT_FILES,
-    "qai_hub_models/models/_configs/_info_yaml_enums.py": REPRESENTATIVE_EXPORT_FILES,
-    "qai_hub_models/models/_configs/_info_yaml_llm_details.py": REPRESENTATIVE_EXPORT_FILES,
-    "qai_hub_models/models/_configs/info_yaml.py": REPRESENTATIVE_EXPORT_FILES,
-    "qai_hub_models/models/_configs/perf_yaml.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/code_gen_yaml.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/_info_yaml_enums.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/_info_yaml_llm_details.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/info_yaml.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/model_disable_reasons.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/configs/perf_yaml.py": REPRESENTATIVE_EXPORT_FILES,
+    "qai_hub_models/_version.py": [],
 }
 
 
@@ -158,6 +173,7 @@ def resolve_affected_models(
                 "test.py",
                 "test_generated.py",
                 "demo.py",
+                "requirements.txt",
             ]:
                 continue
             if not include_model and file_path.name == "model.py":
@@ -179,7 +195,7 @@ def resolve_affected_models(
 
 def get_code_gen_changed_models() -> set[str]:
     """Get models where the `code-gen.yaml` changed."""
-    changed_code_gen_files = get_changed_files_in_package("code-gen.yaml")
+    changed_code_gen_files = get_changed_files_in_package(suffix="code-gen.yaml")
     changed_models = []
     for f in changed_code_gen_files:
         if not f.startswith(PY_PACKAGE_RELATIVE_MODELS_ROOT):
@@ -190,6 +206,7 @@ def get_code_gen_changed_models() -> set[str]:
 
 @functools.lru_cache(maxsize=2)  # Size 2 for `.py` and `code-gen.yaml`
 def get_changed_files_in_package(
+    prefix: Optional[str] = None,
     suffix: Optional[str] = None,
 ) -> Iterable[str]:
     """
@@ -198,7 +215,6 @@ def get_changed_files_in_package(
     If the suffix argument is passed, restrict only to files ending in that suffix.
     """
     with new_cd(REPO_ROOT):
-        os.makedirs("build/model-zoo/", exist_ok=True)
         changed_files_path = "build/changed-qaihm-files.txt"
         if not on_github():
             run(f"git diff origin/main --name-only > {changed_files_path}")
@@ -208,6 +224,7 @@ def get_changed_files_in_package(
                     file
                     for file in f.read().split("\n")
                     if file.startswith(PY_PACKAGE_RELATIVE_SRC_ROOT)
+                    and (prefix is None or file.startswith(prefix))
                     and (suffix is None or file.endswith(suffix))
                 ]
                 # Weed out duplicates
@@ -287,8 +304,10 @@ def get_changed_models(
 
     Returns a list of model IDs (folder names) that have changed.
     """
+    files = list(get_changed_files_in_package(suffix="requirements.txt"))
+    files.extend(get_changed_files_in_package(suffix=".py"))
     return resolve_affected_models(
-        get_changed_files_in_package(".py"),
+        files,
         include_model,
         include_demo,
         include_export,
@@ -303,17 +322,34 @@ def get_all_models() -> set[str]:
     """
     model_names: set[str] = set()
     for model_name in os.listdir(PY_PACKAGE_MODELS_ROOT):
-        if os.path.exists(os.path.join(PY_PACKAGE_MODELS_ROOT, model_name, "model.py")):
+        if os.path.exists(
+            os.path.join(PY_PACKAGE_MODELS_ROOT, model_name, "info.yaml")
+        ):
             model_names.add(model_name)
 
+    bench_dir = os.getenv("QAIHM_BENCH_TEST_DIR", STATIC_MODELS_ROOT)
+    static_models = {x[:-5] for x in os.listdir(bench_dir) if x.endswith(".yaml")}
+
     # Select a subset of models based on user input
-    allowed_models = os.environ.get("QAIHM_TEST_MODELS", None)
-    if allowed_models and allowed_models.upper() != "ALL":
-        allowed_models = allowed_models.split(",")
-        for model in allowed_models:
-            if model not in model_names:
-                raise ValueError(f"Unknown model selected: {model}")
-        model_names = set(allowed_models)
+    allowed_models_str = os.environ.get("QAIHM_TEST_MODELS", None).lower()
+    if allowed_models_str and allowed_models_str not in ["all", "pytorch"]:
+        if allowed_models_str == "bench":
+            with open(PUBLIC_BENCH_MODELS) as f:
+                model_names = set(f.read().strip().split("\n"))
+        else:
+            all_models_list = [model.strip() for model in allowed_models_str.split(",")]
+            allowed_models = set(all_models_list) - static_models
+            for model in allowed_models:
+                if model not in model_names:
+                    raise ValueError(f"Unknown model selected: {model}")
+            model_names = allowed_models
+
+    if os.environ.get("QAIHM_TEST_PRECISIONS", "default").lower() != "default":
+        cleaned_models: set[str] = set()
+        for model in model_names:
+            if model not in static_models and get_is_hub_quantized(model):
+                cleaned_models.add(model)
+        model_names = cleaned_models
 
     return model_names
 

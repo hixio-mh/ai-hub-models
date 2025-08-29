@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 from collections.abc import Mapping
@@ -11,8 +12,9 @@ from typing import Any
 import torch
 import torch.nn.functional as F
 
-from qai_hub_models.models._shared.yolo.model import Yolo
+from qai_hub_models.models._shared.yolo.model import DEFAULT_YOLO_IMAGE_INPUT_HW, Yolo
 from qai_hub_models.models._shared.yolo.utils import detect_postprocess_split_input
+from qai_hub_models.models.common import Precision
 from qai_hub_models.utils.asset_loaders import SourceAsRoot, find_replace_in_repo
 
 YOLOV7_SOURCE_REPOSITORY = "https://github.com/WongKinYiu/yolov7"
@@ -28,17 +30,15 @@ class YoloV7(Yolo):
     def __init__(
         self,
         yolov7_feature_extractor: torch.nn.Module,
-        yolov7_detector: torch.nn.Module,
+        yolov7_detector: _YoloV7Detector,
         include_postprocessing: bool = True,
         split_output: bool = False,
-        class_dtype: torch.dtype = torch.float32,
     ) -> None:
         super().__init__()
         self.yolov7_feature_extractor = yolov7_feature_extractor
         self.yolov7_detector = yolov7_detector
         self.include_postprocessing = include_postprocessing
         self.split_output = split_output
-        self.class_dtype = class_dtype
 
     @classmethod
     def from_pretrained(
@@ -46,6 +46,8 @@ class YoloV7(Yolo):
         weights_name: str = DEFAULT_WEIGHTS,
         include_postprocessing: bool = True,
         split_output: bool = False,
+        height: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
+        width: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
     ):
         """Load YoloV7 from a weightfile created by the source YoloV7 repository."""
         # Load PyTorch model from disk
@@ -59,18 +61,20 @@ class YoloV7(Yolo):
 
         # Generate replacement detector that can be traced
         detector_head_state_dict = yolov7_model.model[-1].state_dict()
-        detector_head_state_dict["stride"] = yolov7_model.model[-1].stride
-
-        h, w = cls.get_input_spec()["image"][0][2:]
-        detector_head_state_dict["h"] = h
-        detector_head_state_dict["w"] = w
-        yolov7_detect = _YoloV7Detector.from_yolov7_state_dict(detector_head_state_dict)
+        yolov7_detect = _YoloV7Detector.from_yolov7_state_dict(
+            detector_head_state_dict, (height, width), yolov7_model.model[-1].stride
+        )
 
         return cls(
             yolov7_model,
             yolov7_detect,
             include_postprocessing,
             split_output,
+        )
+
+    def _get_input_spec_for_instance(self, batch_size: int = 1):
+        return super().get_input_spec(
+            batch_size, self.yolov7_detector.h, self.yolov7_detector.w
         )
 
     def forward(self, image):
@@ -80,7 +84,7 @@ class YoloV7(Yolo):
         Parameters:
             image: Pixel values pre-processed for encoder consumption.
                    Range: float[0, 1]
-                   3-channel Color Space: BGR
+                   3-channel Color Space: RGB
 
         Returns:
             If self.include_postprocessing:
@@ -122,9 +126,7 @@ class YoloV7(Yolo):
                 return detector_output
             return torch.cat(detector_output, -1)
 
-        return detect_postprocess_split_input(
-            *detector_output, class_dtype=self.class_dtype
-        )
+        return detect_postprocess_split_input(*detector_output)  # type: ignore[misc]
 
     @staticmethod
     def get_output_names(
@@ -140,6 +142,9 @@ class YoloV7(Yolo):
         return self.__class__.get_output_names(
             self.include_postprocessing, self.split_output
         )
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        return "--range_scheme min_max"
 
 
 class _YoloV7Detector(torch.nn.Module):  # YoloV7 Detection
@@ -173,6 +178,8 @@ class _YoloV7Detector(torch.nn.Module):  # YoloV7 Detection
     @staticmethod
     def from_yolov7_state_dict(
         state_dict: Mapping[str, Any],
+        input_shape: tuple[int, int],
+        stride: torch.Tensor,
         strict: bool = True,
     ):
         """
@@ -198,10 +205,8 @@ class _YoloV7Detector(torch.nn.Module):  # YoloV7 Detection
             m_in_channels.append(new_state_dict[weight].shape[1])
             m_out_channel = new_state_dict[weight].shape[0]
 
-        input_shape = state_dict["h"], state_dict["w"]
-
         out = _YoloV7Detector(
-            state_dict["stride"],
+            stride,
             na,
             nl,
             m_in_channels,
@@ -217,6 +222,7 @@ class _YoloV7Detector(torch.nn.Module):  # YoloV7 Detection
         stride = int(self.stride[i])
         nx, ny = self.h // stride, self.w // stride
         x = x.reshape(-1, self.na, self.no, nx, ny).permute(0, 1, 3, 4, 2).contiguous()
+        # TODO(13933) Revert once QNN issues with ReduceMax are fixed
         # Pad 1 class up to 2 to get NPU residence
         x = F.pad(x, (0, max(7 - self.no, 0)))
         grid = self._make_grid(nx, ny)
@@ -232,6 +238,7 @@ class _YoloV7Detector(torch.nn.Module):  # YoloV7 Detection
         wh = (wh * 2) ** 2 * self.__getattr__(f"anchor_grid_{i}").squeeze(2)
         wh = wh.reshape(-1, self.na * nx * ny, 2)
 
+        # TODO(13933) Revert max operation once QNN issues with ReduceMax are fixed
         scores = y[..., 4:].reshape(-1, self.na * nx * ny, max(3, self.no - 4))
         return xy, wh, scores
 

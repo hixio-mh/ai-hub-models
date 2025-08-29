@@ -1,12 +1,12 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from enum import Enum
+from enum import Enum, unique
 from pathlib import Path
 from typing import Optional
 
@@ -24,14 +24,15 @@ HUB_MODEL_ID_KEY = "hub_model_id"
 ASSET_CONFIG = ModelZooAssetConfig.from_cfg()
 
 
+@unique
 class CacheMode(Enum):
     ENABLE = "enable"
     DISABLE = "disable"
     OVERWRITE = "overwrite"
 
     @staticmethod
-    def from_string(cache_mode: str) -> CacheMode:
-        return CacheMode[cache_mode.upper()]
+    def from_string(string: str) -> CacheMode:
+        return CacheMode[string.upper()]
 
 
 """
@@ -89,11 +90,12 @@ def _get_model_cache_val(hub_model_id: str) -> dict[str, str]:
 
 def _load_cache_for_model(model_name: str, model_asset_version: int) -> Cache:
     file_path = _get_cache_file_path(model_name, model_asset_version)
-    model_cache = Cache.from_yaml(file_path) if os.path.exists(file_path) else Cache([])
+    model_cache = (
+        Cache.from_yaml(file_path) if os.path.exists(file_path) else Cache(cache=[])
+    )
     return model_cache
 
 
-@dataclass
 class KeyValue(BaseQAIHMConfig):
     # CacheKey for cache
     key: dict[str, str]
@@ -102,31 +104,12 @@ class KeyValue(BaseQAIHMConfig):
     val: dict[str, str]
 
 
-@dataclass
 class Cache(BaseQAIHMConfig):
     """
     Generic cache config storing List of key and value
     """
 
     cache: list[KeyValue]
-
-    @classmethod
-    def from_dict(cls, val_dict) -> Cache:
-        if val_dict is None:
-            raise RuntimeError("Invalid schema. Input dictionary empty.")
-
-        if "cache" not in val_dict:
-            raise RuntimeError(
-                "Invalid input dictionary for Cache, expecting 'cache' entry."
-            )
-
-        cache = []
-        for cache_entry in val_dict["cache"]:
-            if "key" not in cache_entry or "val" not in cache_entry:
-                raise RuntimeError("'key' or 'val' not found in cache entry.")
-            cache.append(KeyValue(cache_entry["key"], cache_entry["val"]))
-
-        return cls(cache)
 
     def contains(self, key: dict[str, str]) -> bool:
         return self.get_item(key) is not None
@@ -140,7 +123,7 @@ class Cache(BaseQAIHMConfig):
     def insert(
         self, key: dict[str, str], value: dict[str, str], overwrite: bool = False
     ):
-        key_val = KeyValue(key, value)
+        key_val = KeyValue(key=key, val=value)
         for i, k_v in enumerate(self.cache):
             if k_v.key == key:
                 if not overwrite:

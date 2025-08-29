@@ -1,13 +1,19 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
 import torch.nn as nn
 
-from qai_hub_models.models._shared.yolo.model import Yolo, yolo_detect_postprocess
+from qai_hub_models.models._shared.yolo.model import (
+    DEFAULT_YOLO_IMAGE_INPUT_HW,
+    Yolo,
+    yolo_detect_postprocess,
+)
+from qai_hub_models.models.common import Precision
 from qai_hub_models.utils.asset_loaders import (
     SourceAsRoot,
     find_replace_in_repo,
@@ -37,13 +43,11 @@ class YoloV8Detector(Yolo):
         model: nn.Module,
         include_postprocessing: bool = True,
         split_output: bool = False,
-        use_quantized_postprocessing: bool = False,
     ) -> None:
         super().__init__()
         self.model = model
         self.include_postprocessing = include_postprocessing
         self.split_output = split_output
-        self.use_quantized_postprocessing = use_quantized_postprocessing
 
     @classmethod
     def from_pretrained(
@@ -51,7 +55,8 @@ class YoloV8Detector(Yolo):
         ckpt_name: str = DEFAULT_WEIGHTS,
         include_postprocessing: bool = True,
         split_output: bool = False,
-        use_quantized_postprocessing: bool = False,
+        height: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
+        width: int = DEFAULT_YOLO_IMAGE_INPUT_HW,
     ):
         with SourceAsRoot(
             SOURCE_REPO,
@@ -105,9 +110,8 @@ class YoloV8Detector(Yolo):
             assert isinstance(model.model, torch.nn.Module)
             detect_module = model.model._modules["22"]
             assert isinstance(detect_module, Detect)
-            _, _, h, w = cls.get_input_spec()["image"][0]
             make_anchors_input = [
-                torch.randn((1, 1, int(h // stride), int(w // stride)))
+                torch.randn((1, 1, int(height // stride), int(width // stride)))
                 for stride in detect_module.stride
             ]
             detect_module.anchors, detect_module.strides = (
@@ -119,7 +123,6 @@ class YoloV8Detector(Yolo):
                 model,
                 include_postprocessing,
                 split_output,
-                use_quantized_postprocessing,
             )
 
     def forward(self, image):
@@ -156,9 +159,7 @@ class YoloV8Detector(Yolo):
                 return boxes, scores
             return torch.cat([boxes, scores], dim=1)
 
-        boxes, scores, classes = yolo_detect_postprocess(
-            boxes, scores, self.use_quantized_postprocessing
-        )
+        boxes, scores, classes = yolo_detect_postprocess(boxes, scores)
         return boxes, scores, classes
 
     @staticmethod
@@ -175,3 +176,6 @@ class YoloV8Detector(Yolo):
         return self.__class__.get_output_names(
             self.include_postprocessing, self.split_output
         )
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        return "--range_scheme min_max"

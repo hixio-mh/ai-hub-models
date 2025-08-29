@@ -1,12 +1,11 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
-from qai_hub_models.models._shared.face_attrib_net.app import FaceAttribNetApp
-from qai_hub_models.models._shared.face_attrib_net.demo import INPUT_IMAGE_ADDRESS
-from qai_hub_models.models._shared.face_attrib_net.demo import (
-    face_attrib_net_demo as demo_main,
-)
+
+from qai_hub_models.models.face_attrib_net.app import FaceAttribNetApp
+from qai_hub_models.models.face_attrib_net.demo import INPUT_IMAGE_ADDRESS
+from qai_hub_models.models.face_attrib_net.demo import main as demo_main
 from qai_hub_models.models.face_attrib_net.model import (
     MODEL_ASSET_VERSION,
     MODEL_ID,
@@ -26,7 +25,7 @@ OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 
 
 # Verify that the output from Torch is as expected.
-def test_task():
+def test_task() -> None:
     app = FaceAttribNetApp(FaceAttribNet.from_pretrained())
     original_image = load_image(INPUT_IMAGE_ADDRESS)
     output_tensor = app.run_inference_on_image(original_image)
@@ -44,5 +43,5 @@ def test_task():
     print("Unit test is done")
 
 
-def test_demo():
-    demo_main(FaceAttribNet)
+def test_demo() -> None:
+    demo_main(is_test=True)

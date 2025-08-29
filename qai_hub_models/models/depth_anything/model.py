@@ -1,13 +1,15 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import torch
 from transformers import AutoModelForDepthEstimation
 
 from qai_hub_models.models._shared.depth_estimation.model import DepthEstimationModel
+from qai_hub_models.models.common import Precision
 from qai_hub_models.utils.image_processing import normalize_image_torchvision
 
 MODEL_ID = __name__.split(".")[-2]
@@ -51,3 +53,14 @@ class DepthAnything(DepthEstimationModel):
         used to submit profiling job on Qualcomm AI Hub.
         """
         return {"image": ((batch_size, 3, height, width), "float32")}
+
+    def get_hub_quantize_options(self, precision: Precision) -> str:
+        return "--range_scheme min_max"
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["nyuv2x518"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str:
+        return "nyuv2x518"

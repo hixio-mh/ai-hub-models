@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [AOT-GAN: High resolution image in-painting on-device](https://aihub.qualcomm.com/models/aotgan)
 
 AOT-GAN is a machine learning model that allows to erase and in-paint part of given input image.
@@ -15,6 +12,11 @@ accross various devices, can be found [here](https://aihub.qualcomm.com/models/a
 
 
 ## Example & Usage
+
+Install the package via pip:
+```bash
+pip install qai-hub-models
+```
 
 
 Once installed, run the following simple CLI demo:
@@ -35,8 +37,7 @@ on-device deployment. This can be run as follows:
 ```bash
 python -m qai_hub_models.models.aotgan.export
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -54,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

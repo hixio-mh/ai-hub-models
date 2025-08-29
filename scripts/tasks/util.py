@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 from __future__ import annotations
 
 import contextlib
@@ -70,10 +71,10 @@ def get_code_gen_str_field(model_name: str, field_name: str) -> str | None:
     yaml_path = Path(PY_PACKAGE_MODELS_ROOT) / model_name / "code-gen.yaml"
     if yaml_path.exists():
         with open(yaml_path) as f:
-            field = f"{field_name}: "
+            field = f"{field_name}:"
             for line in f.readlines():
                 if line.startswith(field):
-                    return line[len(field) : -1].strip("'").strip('"')
+                    return line[len(field) : -1].strip("'").strip('"').strip()
 
     return None
 
@@ -85,11 +86,13 @@ def can_support_aimet(platform: str = sys.platform) -> bool:
 
 
 def get_is_hub_quantized(model_name) -> bool:
-    return check_code_gen_field(model_name.lower(), "use_hub_quantization")
+    return not check_code_gen_field(
+        model_name, "is_precompiled"
+    ) and not check_code_gen_field(model_name, "is_aimet")
 
 
 def model_needs_aimet(model_name: str) -> bool:
-    return "quantized" in model_name.lower() and not get_is_hub_quantized(model_name)
+    return check_code_gen_field(model_name, "is_aimet")
 
 
 def get_model_python_version_requirements(
@@ -197,3 +200,27 @@ def get_env_bool(key: str, default: Optional[bool] = None) -> Optional[bool]:
 
 def on_ci() -> bool:
     return get_env_bool("QAIHM_CI") or False
+
+
+def debug_mode() -> bool:
+    return get_env_bool("DEBUG_MODE") or False
+
+
+@functools.cache
+def uv_installed() -> bool:
+    try:
+        result = subprocess.run(
+            ["which uv"], capture_output=True, executable=BASH_EXECUTABLE, shell=True
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+@functools.cache
+def get_pip() -> str:
+    # UV has trouble building many packages from source on Python 3.12
+    if uv_installed() and (sys.version_info.major == 3 and sys.version_info.minor < 12):
+        return "uv pip"
+    else:
+        return "pip"

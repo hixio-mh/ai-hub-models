@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 import pytest
 
@@ -23,7 +24,7 @@ OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 
 # Verify that the output from Torch is as expected.
 @skip_clone_repo_check
-def test_task():
+def test_task() -> None:
     (_, _, height, width) = DepthAnythingV2.get_input_spec()["image"][0]
     app = DepthEstimationApp(DepthAnythingV2.from_pretrained(), height, width)
     original_image = load_image(INPUT_IMAGE_ADDRESS)
@@ -37,7 +38,7 @@ def test_task():
 
 @pytest.mark.trace
 @skip_clone_repo_check
-def test_trace():
+def test_trace() -> None:
     (_, _, height, width) = DepthAnythingV2.get_input_spec()["image"][0]
     traced_model = DepthAnythingV2.from_pretrained().convert_to_torchscript()
     app = DepthEstimationApp(traced_model, height, width)
@@ -51,5 +52,5 @@ def test_trace():
 
 
 @skip_clone_repo_check
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

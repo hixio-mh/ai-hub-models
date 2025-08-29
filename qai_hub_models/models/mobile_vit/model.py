@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 
 from __future__ import annotations
 
@@ -21,10 +22,13 @@ TEST_IMAGE = CachedWebModelAsset.from_asset_store(
 
 
 class MobileVIT(ImagenetClassifier):
-
     """Exportable MobileVIT model, end-to-end."""
 
-    def __init__(self, net, feature_extractor):
+    def __init__(
+        self,
+        net: MobileViTForImageClassification,
+        feature_extractor: MobileViTFeatureExtractor,
+    ) -> None:
         super().__init__(net, transform_input=False, normalize_input=False)
         self.net = net
         self.feature_extractor = feature_extractor
@@ -32,16 +36,18 @@ class MobileVIT(ImagenetClassifier):
     @classmethod
     def from_pretrained(cls, ckpt_name: str = DEFAULT_WEIGHTS):
         feature_extractor = MobileViTFeatureExtractor.from_pretrained(ckpt_name)
-        feature_extractor.size = {"height": 224, "width": 224}
+        assert isinstance(feature_extractor, MobileViTFeatureExtractor)
+        feature_extractor.size = {"height": 256, "width": 256}
         net = MobileViTForImageClassification.from_pretrained(ckpt_name)
+        assert isinstance(net, MobileViTForImageClassification)
         return cls(net, feature_extractor)
 
     def forward(self, image_tensor):
         return self.net(image_tensor, return_dict=False)[0]
 
     @staticmethod
-    def get_input_spec() -> InputSpec:
-        return {"image_tensor": ((1, 3, 256, 256), "float32")}
+    def get_input_spec(batch_size: int = 1) -> InputSpec:
+        return {"image_tensor": ((batch_size, 3, 256, 256), "float32")}
 
     def _sample_inputs_impl(
         self, input_spec: InputSpec | None = None
@@ -51,3 +57,11 @@ class MobileVIT(ImagenetClassifier):
             "pixel_values"
         ]
         return dict(image_tensor=[tensor.numpy()])
+
+    @staticmethod
+    def eval_datasets() -> list[str]:
+        return ["imagenet_256", "imagenette_256"]
+
+    @staticmethod
+    def calibration_dataset_name() -> str | None:
+        return "imagenette_256"

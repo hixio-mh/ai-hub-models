@@ -1,7 +1,10 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
+
+from PIL import Image
 
 from qai_hub_models.models._shared.depth_estimation.app import DepthEstimationApp
 from qai_hub_models.utils.args import (
@@ -41,6 +44,7 @@ def depth_estimation_demo(
 
     app = DepthEstimationApp(model, height, width)
     heatmap_image = app.estimate_depth(image)
+    assert isinstance(heatmap_image, Image.Image)
 
     if not is_test:
         # Resize / unpad annotated image

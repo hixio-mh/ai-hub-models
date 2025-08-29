@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 from PIL.Image import fromarray
 
@@ -20,17 +21,17 @@ OUTPUT_ADDRESS = CachedWebModelAsset.from_asset_store(
 )
 
 
-def test_task():
+def test_task() -> None:
     net = UNet.from_pretrained()
 
     img = load_image(IMAGE_ADDRESS)
-    mask = UNetSegmentationApp(net).predict(img)
+    mask = UNetSegmentationApp(net).predict(img, raw_output=True)
 
     # Convert raw mask of 0s and 1s into a PIL Image
-    img = fromarray(mask)
+    img = fromarray(mask[0].argmax(0) == 1)
     expected_out = load_image(OUTPUT_ADDRESS)
     np.testing.assert_allclose(np.array(img), np.array(expected_out))
 
 
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

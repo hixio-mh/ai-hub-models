@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import pytest
 
 from qai_hub_models.models._shared.detr.app import DETRApp
@@ -15,7 +16,7 @@ IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 )
 
 
-def test_task():
+def test_task() -> None:
     net = DETRResNet101.from_pretrained(DEFAULT_WEIGHTS)
     img = load_image(IMAGE_ADDRESS)
     _, _, label, _ = DETRApp(net).predict(img, DEFAULT_WEIGHTS)
@@ -23,12 +24,12 @@ def test_task():
 
 
 @pytest.mark.trace
-def test_trace():
+def test_trace() -> None:
     net = DETRResNet101.from_pretrained(DEFAULT_WEIGHTS).convert_to_torchscript()
     img = load_image(IMAGE_ADDRESS)
     _, _, label, _ = DETRApp(net).predict(img, DEFAULT_WEIGHTS)
     assert set(list(label.numpy())) == {75, 63, 17}
 
 
-def test_demo():
+def test_demo() -> None:
     demo_main(is_test=True)

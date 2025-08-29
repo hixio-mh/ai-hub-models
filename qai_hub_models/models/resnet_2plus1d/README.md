@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [ResNet-2Plus1D: Sports and human action recognition in videos](https://aihub.qualcomm.com/models/resnet_2plus1d)
 
 ResNet (2+1)D Convolutions is a network which explicitly factorizes 3D convolution into two separate and successive operations, a 2D spatial convolution and a 1D temporal convolution. It used for video understanding applications.
@@ -25,7 +22,7 @@ pip install "qai-hub-models[resnet-2plus1d]"
 Once installed, run the following simple CLI demo:
 
 ```bash
-python -m qai_hub_models.models.resnet_2plus1d.demo
+python -m qai_hub_models.models.resnet_2plus1d.demo { --quantize w8a8 }
 ```
 More details on the CLI tool can be found with the `--help` option. See
 [demo.py](demo.py) for sample usage of the model including pre/post processing
@@ -38,10 +35,9 @@ This repository contains export scripts that produce a model optimized for
 on-device deployment. This can be run as follows:
 
 ```bash
-python -m qai_hub_models.models.resnet_2plus1d.export
+python -m qai_hub_models.models.resnet_2plus1d.export { --quantize w8a8 }
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -59,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

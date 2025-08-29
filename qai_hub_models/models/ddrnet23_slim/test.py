@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 import pytest
 
@@ -24,7 +25,7 @@ OUTPUT_IMAGE_ADDRESS = CachedWebModelAsset.from_asset_store(
 # Verify that the output from Torch is as expected.
 @skip_clone_repo_check
 def test_task():
-    app = SegmentationApp(DDRNet.from_pretrained())
+    app = SegmentationApp(DDRNet.from_pretrained(), False)
     original_image = load_image(INPUT_IMAGE_ADDRESS)
     output_image = app.segment_image(original_image)[0]
     output_image_oracle = load_image(OUTPUT_IMAGE_ADDRESS)
@@ -37,7 +38,7 @@ def test_task():
 @pytest.mark.trace
 @skip_clone_repo_check
 def test_trace():
-    app = SegmentationApp(DDRNet.from_pretrained().convert_to_torchscript())
+    app = SegmentationApp(DDRNet.from_pretrained().convert_to_torchscript(), False)
     original_image = load_image(INPUT_IMAGE_ADDRESS)
     output_image = app.segment_image(original_image)[0]
     output_image_oracle = load_image(OUTPUT_IMAGE_ADDRESS)

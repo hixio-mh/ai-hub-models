@@ -1,7 +1,8 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import numpy as np
 import torch
 import torchvision.models as tv_models
@@ -16,7 +17,7 @@ from qai_hub_models.models.swin_tiny.model import MODEL_ID, SwinTiny
 from qai_hub_models.utils.image_processing import normalize_image_torchvision
 
 
-def test_numerical(imagenet_sample_torch: torch.Tensor) -> None:
+def test_numerical(imagenet_sample_torch: torch.Tensor) -> None:  # noqa: F811
     # Ensure that the optimized SwinTiny matches the original one numerically
     x = imagenet_sample_torch
     model_opt = SwinTiny.from_pretrained().eval()

@@ -1,6 +1,3 @@
-[![Qualcomm® AI Hub Models](https://qaihub-public-assets.s3.us-west-2.amazonaws.com/qai-hub-models/quic-logo.jpg)](../../README.md)
-
-
 # [DETR-ResNet101: Transformer based object detector with ResNet101 backbone](https://aihub.qualcomm.com/models/detr_resnet101)
 
 DETR is a machine learning model that can detect objects (trained on COCO dataset).
@@ -40,8 +37,7 @@ on-device deployment. This can be run as follows:
 ```bash
 python -m qai_hub_models.models.detr_resnet101.export
 ```
-Additional options are documented with the `--help` option. Note that the above
-script requires access to Deployment instructions for Qualcomm® AI Hub.
+Additional options are documented with the `--help` option.
 
 
 ## License
@@ -59,5 +55,3 @@ script requires access to Deployment instructions for Qualcomm® AI Hub.
 ## Community
 * Join [our AI Hub Slack community](https://aihub.qualcomm.com/community/slack) to collaborate, post questions and learn more about on-device AI.
 * For questions or feedback please [reach out to us](mailto:ai-hub-support@qti.qualcomm.com).
-
-

@@ -1,13 +1,14 @@
 # ---------------------------------------------------------------------
-# Copyright (c) 2024 Qualcomm Innovation Center, Inc. All rights reserved.
+# Copyright (c) 2025 Qualcomm Technologies, Inc. and/or its subsidiaries.
 # SPDX-License-Identifier: BSD-3-Clause
 # ---------------------------------------------------------------------
+
 import os
 import subprocess
 
 from torchvision.datasets import ImageNet
 
-from qai_hub_models.datasets.common import BaseDataset, DatasetSplit
+from qai_hub_models.datasets.common import BaseDataset, DatasetMetadata, DatasetSplit
 from qai_hub_models.utils.asset_loaders import CachedWebDatasetAsset
 from qai_hub_models.utils.image_processing import IMAGENET_TRANSFORM
 
@@ -40,7 +41,9 @@ class ImagenetDataset(BaseDataset, ImageNet):
     Wrapper class for using the Imagenet validation dataset: https://www.image-net.org/
     """
 
-    def __init__(self, split: DatasetSplit = DatasetSplit.VAL):
+    def __init__(
+        self, split: DatasetSplit = DatasetSplit.VAL, transform=IMAGENET_TRANSFORM
+    ):
         """
         A direct download link for the validation set is not available.
         Users should download the validation dataset manually and pass the local filepath
@@ -56,7 +59,7 @@ class ImagenetDataset(BaseDataset, ImageNet):
             self,
             root=str(self.dataset_path),
             split=self.split_str,
-            transform=IMAGENET_TRANSFORM,
+            transform=transform,
         )
 
     def _validate_data(self) -> bool:
@@ -97,3 +100,17 @@ class ImagenetDataset(BaseDataset, ImageNet):
 
         print("Moving images to appropriate class folder. This may take a few minutes.")
         subprocess.call(f"sh {VAL_PREP_ASSET.path().name}", shell=True, cwd=val_path)
+
+    @staticmethod
+    def default_samples_per_job() -> int:
+        """
+        The default value for how many samples to run in each inference job.
+        """
+        return 2500
+
+    @staticmethod
+    def get_dataset_metadata() -> DatasetMetadata:
+        return DatasetMetadata(
+            link="https://www.image-net.org/",
+            split_description="validation split",
+        )
