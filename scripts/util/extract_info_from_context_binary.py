@@ -15,11 +15,25 @@ QNN_TYPE_TO_STR = {
 }
 
 
+def validate_qnn_sdk_path(qnn_sdk):
+    # Must be an absolute path
+    if not os.path.isabs(qnn_sdk):
+        raise ValueError("The --qnn path must be an absolute path")
+    # Disallow '..' and spaces in path components for extra safety
+    if ".." in qnn_sdk or " " in qnn_sdk:
+        raise ValueError("The --qnn path cannot contain '..' or spaces")
+    # Check that the sdk path exists and is a directory
+    if not os.path.isdir(qnn_sdk):
+        raise ValueError("The --qnn path does not exist or is not a directory")
+
 def run_utility(qnn_sdk, model_path):
+    exec_path = f"{qnn_sdk}/qnn_sdk/default/bin/x86_64-linux-clang/qnn-context-binary-utility"
+    if not os.path.isfile(exec_path):
+        raise FileNotFoundError(f"Could not find qnn-context-binary-utility at {exec_path}")
     json_path = f"{os.path.splitext(os.path.basename(model_path))[0]}.json"
     subprocess.run(
         [
-            f"{qnn_sdk}/qnn_sdk/default/bin/x86_64-linux-clang/qnn-context-binary-utility",
+            exec_path,
             "--context_binary",
             model_path,
             "--json_file",
@@ -61,6 +75,7 @@ def main():
         "--qnn",
         type=str,
         default=None,
+    validate_qnn_sdk_path(args.qnn)
         help="QNN SDK path",
     )
     args = parser.parse_args()
@@ -68,7 +83,6 @@ def main():
 
     for model_path in os.listdir(args.model):
         if os.path.splitext(model_path)[-1] == ".bin":
-            print(f"Model {model_path}")
             print("===================")
             json_path = run_utility(args.qnn, os.path.join(args.model, model_path))
             print_details_from_json(json_path)
